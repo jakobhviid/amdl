@@ -23,13 +23,6 @@ const BROWSER_LIST: &str = "Chrome, Chromium, Firefox, Brave, Vivaldi, Edge, or 
 pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
     if !refresh {
         if let Some(p) = explicit {
-            if p.as_os_str() == "-" {
-                ui::info("Reading cookies from stdin…");
-                return match store_pasted(&ui::read_all_stdin())? {
-                    Some(path) => Ok(path),
-                    None => bail!("no apple.com cookies found on stdin"),
-                };
-            }
             if !p.is_file() {
                 bail!("--cookies {} does not exist", p.display());
             }
@@ -37,6 +30,14 @@ pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
                 ui::warn(&format!("{} looks expired — it may not work", p.display()));
             }
             return Ok(p);
+        }
+        // $AMDL_COOKIES = raw cookie text (for headless/CI secrets, no file on disk).
+        if let Some(raw) = env_cookies() {
+            ui::info("Using cookies from $AMDL_COOKIES");
+            if let Some(path) = store_pasted(&raw)? {
+                return Ok(path);
+            }
+            ui::warn("$AMDL_COOKIES held no apple.com cookies — falling back");
         }
         let default = gamdl_default();
         if default.is_file() && !expired(&default) {
@@ -182,16 +183,12 @@ fn clean_netscape(raw: &str) -> (String, usize, bool) {
 /// `amdl cookies`: report what we'd use and whether the browser extraction works.
 /// Does not download anything.
 pub fn diagnose() -> Result<()> {
-    if !ui::stdin_tty() {
-        // Piped input: validate the cookies fed on stdin (e.g. `amdl cookies < file.txt`).
-        ui::info("Validating cookies from stdin…");
-        return match store_pasted(&ui::read_all_stdin())? {
-            Some(p) => {
-                ui::ok(&format!("looks usable → {}", p.display()));
-                Ok(())
-            }
-            None => bail!("no usable apple.com cookies on stdin"),
-        };
+    if let Some(raw) = env_cookies() {
+        ui::info("$AMDL_COOKIES is set — validating its contents:");
+        match store_pasted(&raw)? {
+            Some(p) => ui::ok(&format!("  usable → {}", p.display())),
+            None => ui::warn("  no apple.com cookies in $AMDL_COOKIES"),
+        }
     }
     let default = gamdl_default();
     if default.is_file() {
@@ -292,6 +289,11 @@ fn write_cache(netscape: &str) -> Result<PathBuf> {
     fs::create_dir_all(out.parent().unwrap())?;
     fs::write(&out, netscape).map_err(|e| anyhow!(e))?;
     Ok(out)
+}
+
+/// Raw cookie text from $AMDL_COOKIES, if set and non-empty.
+fn env_cookies() -> Option<String> {
+    std::env::var("AMDL_COOKIES").ok().filter(|s| !s.trim().is_empty())
 }
 
 fn now_secs() -> i64 {

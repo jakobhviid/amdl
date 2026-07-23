@@ -32,13 +32,14 @@ cargo build --release                   # → ./target/release/amdl
 
 gamdl needs a browser login session to fetch. amdl helps resolve one, in order:
 
-1. `--cookies <file>` if you pass one,
-2. gamdl's own `~/.gamdl/cookies.txt` — **if it isn't expired**,
-3. **auto-extracted from an installed browser** — Chrome, Chromium, Firefox,
+1. `--cookies <file>` (or `$AMDL_COOKIES_FILE`) if set,
+2. `$AMDL_COOKIES` — the raw cookie text itself (headless/CI, no file on disk),
+3. gamdl's own `~/.gamdl/cookies.txt` — **if it isn't expired**,
+4. **auto-extracted from an installed browser** — Chrome, Chromium, Firefox,
    Brave, Vivaldi, Edge, Arc, and (on macOS) **Safari**,
-4. if the file/browser cookies look **expired**, or none are found: it warns you
-   to log in again at `https://music.apple.com` in one of those browsers, then
-   retries.
+5. if the file/browser cookies look **expired**, or none are found: it warns you
+   to log in again at `https://music.apple.com` (and, in a terminal, offers to
+   let you paste them).
 
 amdl never writes to `~/.gamdl`; browser cookies are cached under
 `~/.cache/amdl/` and passed to gamdl via `--cookies-path`. Run `amdl cookies` to
@@ -50,17 +51,21 @@ check what amdl would use, without downloading anything.
 
 ### Headless / server (no browser)
 
-With no browser to read, amdl accepts cookies you paste or pipe. The parser is
-lenient — it takes a Netscape `cookies.txt` (tab- **or** space-separated, incl.
-`#HttpOnly_` lines) **or** a `document.cookie` / `Cookie:`-header string
-(`name=value; name=value`), keeps the `apple.com` cookies, and normalises them:
+Point amdl at a cookies file, or hand it the cookie text directly via an
+environment variable:
 
 ```sh
-amdl download --cookies - 'https://music.apple.com/…' < cookies.txt   # pipe a file
-pbpaste | amdl cookies                                                # validate a paste
+amdl download --cookies /path/cookies.txt 'https://music.apple.com/…'
+export AMDL_COOKIES_FILE=/path/cookies.txt      # same, as an env var
+export AMDL_COOKIES="$(cat cookies.txt)"        # or the cookie text itself (no file)
 ```
 
-Interactively, if no browser is found `download` offers to let you paste the
+`$AMDL_COOKIES` is lenient about format — a Netscape `cookies.txt` (tab- **or**
+space-separated, incl. `#HttpOnly_` lines) **or** a `document.cookie` /
+`Cookie:`-header string (`name=value; name=value`); amdl keeps the `apple.com`
+cookies and normalises them. Run `amdl cookies` to check what it resolves.
+
+Interactively, if no browser is found `download` also offers to let you paste the
 cookies right in the terminal (finish with a blank line or Ctrl-D).
 
 ## Commands

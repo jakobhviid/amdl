@@ -1,7 +1,7 @@
 //! Logging + progress. Colors respect NO_COLOR / non-TTY (like pwtune); progress
 //! bars are used for the slow stages (download, per-track convert/validate).
 use indicatif::{ProgressBar, ProgressStyle};
-use std::io::{self, BufRead, IsTerminal, Read, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Duration;
 
 fn no_color() -> bool { std::env::var_os("NO_COLOR").is_some() }
@@ -41,13 +41,6 @@ pub fn read_block() -> String {
             Err(_) => break,
         }
     }
-    buf
-}
-
-/// Read all of stdin to EOF (for `--cookies -` piping on a server).
-pub fn read_all_stdin() -> String {
-    let mut buf = String::new();
-    let _ = io::stdin().read_to_string(&mut buf);
     buf
 }
 

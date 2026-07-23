@@ -27,8 +27,8 @@ enum Cmd {
         /// Output library (default: current directory).
         #[arg(short, long)]
         out: Option<PathBuf>,
-        /// gamdl cookies file (default: auto-detect from your browser).
-        #[arg(long)]
+        /// Cookies file (or set $AMDL_COOKIES_FILE; default: auto-detect from your browser).
+        #[arg(long, env = "AMDL_COOKIES_FILE")]
         cookies: Option<PathBuf>,
         /// Scratch dir for gamdl output (default: a temp dir).
         #[arg(long)]
