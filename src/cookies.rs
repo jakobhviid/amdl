@@ -20,6 +20,13 @@ const BROWSER_LIST: &str = "Chrome, Chromium, Firefox, Brave, or Vivaldi";
 pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
     if !refresh {
         if let Some(p) = explicit {
+            if p.as_os_str() == "-" {
+                ui::info("Reading cookies from stdin…");
+                return match store_pasted(&ui::read_all_stdin())? {
+                    Some(path) => Ok(path),
+                    None => bail!("no apple.com cookies found on stdin"),
+                };
+            }
             if !p.is_file() {
                 bail!("--cookies {} does not exist", p.display());
             }
@@ -54,17 +61,135 @@ pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
             }
             None => ui::warn(&format!("No Apple Music login found in {BROWSER_LIST}.")),
         }
+        // Headless / server fallback: let the user paste a cookies.txt.
+        if let Some(path) = prompt_paste()? {
+            return Ok(path);
+        }
         if attempt < 2 {
             ui::warn(&format!("Log in at https://music.apple.com in {BROWSER_LIST}, then continue."));
             ui::ask("→ Press Enter after logging in (Ctrl-C to cancel):");
         }
     }
-    bail!("could not obtain valid Apple Music cookies — log in at https://music.apple.com and retry");
+    bail!("could not obtain valid Apple Music cookies — log in at https://music.apple.com and retry, or pass --cookies <file>");
+}
+
+/// On a terminal with no usable browser (e.g. a server), offer to paste a
+/// Netscape cookies.txt directly. Returns the cache path if one was stored.
+fn prompt_paste() -> Result<Option<PathBuf>> {
+    if !ui::stdin_tty() {
+        // Non-interactive (piped/headless with no TTY): can't prompt.
+        // On a server, pass `--cookies -` to pipe a cookies file instead.
+        return Ok(None);
+    }
+    let ans = ui::ask("No browser cookies. Paste a Netscape cookies.txt instead? [y/N]:");
+    if !ans.eq_ignore_ascii_case("y") {
+        return Ok(None);
+    }
+    ui::info("Paste the cookies now; finish with an empty line (or Ctrl-D):");
+    store_pasted(&ui::read_block())
+}
+
+/// Parse pasted/piped text as a Netscape cookie file, keep the apple.com lines,
+/// normalise to tab-delimited, and write it to amdl's cache. Returns the path,
+/// or None if it held no apple.com cookies.
+fn store_pasted(raw: &str) -> Result<Option<PathBuf>> {
+    let (clean, count, has_token) = clean_netscape(raw);
+    if count == 0 {
+        ui::warn("no apple.com cookie lines found in that input");
+        return Ok(None);
+    }
+    let out = write_cache(&clean)?;
+    if !has_token {
+        ui::warn("pasted cookies have no 'media-user-token' — gamdl may not authenticate");
+    }
+    if expired(&out) {
+        ui::warn("pasted cookies look expired — you may need to log in again at https://music.apple.com");
+    }
+    ui::ok(&format!("saved {count} apple.com cookie(s) → {}", out.display()));
+    Ok(Some(out))
+}
+
+/// Parse cookies from whatever a user is likely to paste, and re-emit a clean,
+/// tab-delimited Netscape file. Returns (text, count, has media-user-token).
+///
+/// Tolerated inputs (tried in order):
+///   1. Netscape `cookies.txt` rows — tab OR space separated, incl. the
+///      `#HttpOnly_` line prefix Chrome/curl use (media-user-token is HttpOnly).
+///   2. `document.cookie` / `Cookie:` header text — `name=value; name=value`,
+///      on one line or one pair per line. Domain/expiry aren't in that form, so
+///      we scope to `.apple.com` (sent to every apple subdomain) as a session
+///      cookie. A regex isn't used on purpose: cookie values contain `=`, `+`,
+///      `/` and base64 `==`, which delimiter-splitting handles cleanly.
+fn clean_netscape(raw: &str) -> (String, usize, bool) {
+    let row = |domain: &str, sub: &str, path: &str, sec: &str, exp: &str, name: &str, val: &str| {
+        (
+            format!("{domain}\t{sub}\t{path}\t{sec}\t{exp}\t{name}\t{val}"),
+            name.eq_ignore_ascii_case("media-user-token"),
+        )
+    };
+    let mut lines = vec!["# Netscape HTTP Cookie File".to_string()];
+    let mut has_token = false;
+
+    // Pass 1: Netscape rows.
+    for line in raw.lines() {
+        let mut l = line.trim();
+        if l.is_empty() {
+            continue;
+        }
+        if let Some(rest) = l.strip_prefix("#HttpOnly_") {
+            l = rest.trim_start(); // keep HttpOnly cookies (drop only the marker)
+        } else if l.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() >= 7 && f[0].contains("apple.com") {
+            let (r, tok) = row(f[0], f[1], f[2], f[3], f[4], f[5], &f[6..].join(" "));
+            lines.push(r);
+            has_token |= tok;
+        }
+    }
+    if lines.len() > 1 {
+        return (lines.join("\n") + "\n", lines.len() - 1, has_token);
+    }
+
+    // Pass 2: `name=value; …` cookie-header / document.cookie style.
+    for pair in raw.split([';', '\n', '\r']) {
+        let pair = pair.trim();
+        if pair.is_empty() || pair.starts_with('#') {
+            continue;
+        }
+        if let Some((name, value)) = pair.split_once('=') {
+            let (name, value) = (name.trim(), value.trim());
+            // Cookie names/values are unescaped tokens — neither contains whitespace.
+            if name.is_empty()
+                || value.is_empty()
+                || name.contains(char::is_whitespace)
+                || value.contains(char::is_whitespace)
+            {
+                continue;
+            }
+            let (r, tok) = row(".apple.com", "TRUE", "/", "TRUE", "0", name, value);
+            lines.push(r);
+            has_token |= tok;
+        }
+    }
+    (lines.join("\n") + "\n", lines.len() - 1, has_token)
 }
 
 /// `amdl cookies`: report what we'd use and whether the browser extraction works.
 /// Does not download anything.
 pub fn diagnose() -> Result<()> {
+    if !ui::stdin_tty() {
+        // Piped input: validate the cookies fed on stdin (e.g. `amdl cookies < file.txt`).
+        ui::info("Validating cookies from stdin…");
+        return match store_pasted(&ui::read_all_stdin())? {
+            Some(p) => {
+                ui::ok(&format!("looks usable → {}", p.display()));
+                Ok(())
+            }
+            None => bail!("no usable apple.com cookies on stdin"),
+        };
+    }
     let default = gamdl_default();
     if default.is_file() {
         let state = if expired(&default) { "looks EXPIRED" } else { "looks valid" };
@@ -85,6 +210,8 @@ pub fn diagnose() -> Result<()> {
         None => {
             ui::warn(&format!("browser: no apple.com cookies found in {BROWSER_LIST}"));
             ui::warn("→ log in at https://music.apple.com in one of those browsers");
+            ui::info("  on a headless server: pipe a cookies file with `--cookies -`,");
+            ui::info("  or run `download` and paste it when prompted.");
         }
     }
     Ok(())

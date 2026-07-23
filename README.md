@@ -44,6 +44,21 @@ amdl never writes to `~/.gamdl`; browser cookies are cached under
 `~/.cache/amdl/` and passed to gamdl via `--cookies-path`. Run `amdl cookies` to
 check what amdl would use, without downloading anything.
 
+### Headless / server (no browser)
+
+With no browser to read, amdl accepts cookies you paste or pipe. The parser is
+lenient — it takes a Netscape `cookies.txt` (tab- **or** space-separated, incl.
+`#HttpOnly_` lines) **or** a `document.cookie` / `Cookie:`-header string
+(`name=value; name=value`), keeps the `apple.com` cookies, and normalises them:
+
+```sh
+amdl download --cookies - 'https://music.apple.com/…' < cookies.txt   # pipe a file
+pbpaste | amdl cookies                                                # validate a paste
+```
+
+Interactively, if no browser is found `download` offers to let you paste the
+cookies right in the terminal (finish with a blank line or Ctrl-D).
+
 ## Commands
 
 ```sh

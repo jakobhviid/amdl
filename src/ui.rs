@@ -1,7 +1,7 @@
 //! Logging + progress. Colors respect NO_COLOR / non-TTY (like pwtune); progress
 //! bars are used for the slow stages (download, per-track convert/validate).
 use indicatif::{ProgressBar, ProgressStyle};
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::time::Duration;
 
 fn no_color() -> bool { std::env::var_os("NO_COLOR").is_some() }
@@ -22,6 +22,33 @@ pub fn ask(prompt: &str) -> String {
         Ok(0) | Err(_) => String::new(),
         Ok(_) => s.trim().to_string(),
     }
+}
+
+/// True if stdin is an interactive terminal (so we can prompt for a paste).
+pub fn stdin_tty() -> bool { io::stdin().is_terminal() }
+
+/// Read a multi-line block pasted on stdin, ending on a blank line or EOF (Ctrl-D).
+pub fn read_block() -> String {
+    let stdin = io::stdin();
+    let mut buf = String::new();
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(l) => {
+                if l.trim().is_empty() && !buf.is_empty() { break; }
+                buf.push_str(&l);
+                buf.push('\n');
+            }
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+/// Read all of stdin to EOF (for `--cookies -` piping on a server).
+pub fn read_all_stdin() -> String {
+    let mut buf = String::new();
+    let _ = io::stdin().read_to_string(&mut buf);
+    buf
 }
 
 /// An indeterminate spinner for opaque long steps (gamdl download).
