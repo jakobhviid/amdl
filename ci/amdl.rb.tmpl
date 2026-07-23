@@ -1,5 +1,5 @@
 class Amdl < Formula
-  desc "Apple Music -> validated -> Opus, into your library (wraps gamdl + ffmpeg)"
+  desc "Music-library harness: validate, transcode to Opus, and organize (wraps gamdl + ffmpeg)"
   homepage "https://github.com/jakobhviid/amdl"
   version "@VERSION@"
   license "MIT"
@@ -25,7 +25,7 @@ class Amdl < Formula
   end
 
   def caveats
-    "amdl is Linux-only and needs your Apple Music login (cookies)."
+    "amdl is Linux-only. Acquisition is handled by gamdl — configure it per its own terms."
   end
 
   test do

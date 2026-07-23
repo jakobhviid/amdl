@@ -2,7 +2,7 @@
 name = "amdl"
 version = "0.1.0"
 edition = "2021"
-description = "Apple Music → validated → Opus, into your library. A true CLI wrapper around gamdl + ffmpeg."
+description = "A music-library harness: validate, transcode to Opus, tag, and keep a library consistent. Wraps gamdl + ffmpeg."
 
 [[bin]]
 name = "amdl"

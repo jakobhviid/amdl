@@ -12,7 +12,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "amdl", version, about = "Apple Music → validated → Opus, into your library.", arg_required_else_help = true)]
+#[command(name = "amdl", version, about = "Music-library harness: validate, transcode to Opus, and keep your library consistent (wraps gamdl + ffmpeg).", arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -20,9 +20,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Download Apple Music URL(s): gamdl → validate → Opus, into the output folder.
+    /// Fetch URL(s) via gamdl, then validate → Opus into your library.
     Download {
-        /// Album / playlist / song / artist URL(s).
+        /// Source URL(s), fetched via gamdl.
         urls: Vec<String>,
         /// Output library (default: current directory).
         #[arg(short, long)]

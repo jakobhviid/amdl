@@ -1,12 +1,17 @@
 # amdl
 
-Apple Music → validated → **Opus**, into your library — a true command-line tool
-around [`gamdl`](https://github.com/glomatico/gamdl) (download/decrypt) and
-`ffmpeg` (validate/convert). **No config file:** paths and knobs are flags, and
-the output defaults to the current folder (run it where you want the files).
+A **music-library harness**: it validates audio, transcodes to space-efficient
+**Opus**, keeps tags and cover art consistent, and repairs a broken library — so a
+large collection stays clean and uniform. It's a thin wrapper around
+[`gamdl`](https://github.com/glomatico/gamdl) and `ffmpeg`; **amdl's value is the
+harness *around* those tools** — the validation, conversion, tagging, and
+library-maintenance pipeline — not the acquisition. **No config file:** paths and
+knobs are flags, and output defaults to the current folder.
 
-> For your **own** Apple Music subscription/library. Needs your Apple Music login
-> (cookies) and a subscription — `amdl` just orchestrates tools you already have.
+> **Acquisition is [gamdl](https://github.com/glomatico/gamdl)'s job, not amdl's.**
+> amdl orchestrates gamdl and processes whatever it produces into a tidy library.
+> Install and use gamdl per its own documentation, terms, and your local laws —
+> that part is at your own risk. amdl supplies only the library-management harness.
 
 ## Install
 
@@ -23,9 +28,9 @@ cargo build --release                   # → ./target/release/amdl
 **Runtime deps:** `gamdl` + `ffmpeg`/`ffprobe` (both in Homebrew). Nothing else —
 `amdl` is a single self-contained binary.
 
-## Cookies (Apple Music login)
+## Login cookies (for gamdl)
 
-`amdl` needs your Apple Music session. It resolves it in this order:
+gamdl needs a browser login session to fetch. amdl helps resolve one, in order:
 
 1. `--cookies <file>` if you pass one,
 2. gamdl's own `~/.gamdl/cookies.txt`,
@@ -42,9 +47,9 @@ amdl <command> [options]
 
 | Command | What it does |
 |---------|--------------|
-| `download <url>…` | gamdl download → decode-validate → Opus, into the output folder (default: CWD). |
-| `convert <src> [dest]` | Transcode an existing library of `.m4a` to Opus (no Apple auth needed). |
-| `recover <dir>` | *(planned)* Re-acquire broken/missing files from Apple Music by their metadata. |
+| `download <url>…` | Fetch via gamdl, then validate → Opus → into your library (default: CWD). |
+| `convert <src> [dest]` | Transcode an existing library of `.m4a` to Opus (no login needed). |
+| `recover <dir>` | *(planned)* Re-acquire broken/missing library files by their metadata. |
 
 Common flags: `-o/--out <dir>` (default CWD), `--cookies`, `--bitrate 192k`,
 `-j/--jobs`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,
