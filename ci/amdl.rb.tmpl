@@ -1,0 +1,34 @@
+class Amdl < Formula
+  desc "Apple Music -> validated -> Opus, into your library (wraps gamdl + ffmpeg)"
+  homepage "https://github.com/jakobhviid/amdl"
+  version "@VERSION@"
+  license "MIT"
+
+  depends_on "ffmpeg"
+  depends_on "gamdl"
+
+  on_linux do
+    on_intel do
+      url "https://github.com/jakobhviid/amdl/releases/download/v@VERSION@/amdl-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "@X86_SHA@"
+    end
+    on_arm do
+      url "https://github.com/jakobhviid/amdl/releases/download/v@VERSION@/amdl-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "@ARM_SHA@"
+    end
+  end
+
+  def install
+    bin.install "amdl"
+    generate_completions_from_executable(bin/"amdl", "completions")
+    (man1/"amdl.1").write Utils.safe_popen_read(bin/"amdl", "man")
+  end
+
+  def caveats
+    "amdl is Linux-only and needs your Apple Music login (cookies)."
+  end
+
+  test do
+    assert_match "amdl", shell_output("#{bin}/amdl --help")
+  end
+end

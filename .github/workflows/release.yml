@@ -1,0 +1,96 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Stamp version (so `amdl --version` matches the release)
+        run: |
+          base=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([0-9]+\.[0-9]+).*/\1/')
+          v="${base}.$(git rev-list --count HEAD)"
+          sed -i -E "s/^version = \"[^\"]*\"/version = \"$v\"/" Cargo.toml
+          echo "stamped $v"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Build (static musl, via cross)
+        run: cross build --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar czf "dist/amdl-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" amdl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([0-9]+\.[0-9]+).*/\1/')
+          VERSION="${base}.$(git rev-list --count HEAD)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          gh release create "v$VERSION" art/*.tar.gz \
+            --title "v$VERSION" --notes "Automated build from ${GITHUB_SHA:0:7}" \
+            || gh release upload "v$VERSION" art/*.tar.gz --clobber
+      - name: Prune old releases (keep only the latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for t in $(gh release list --json tagName -q '.[].tagName' | grep -vx "v$VERSION"); do
+            gh release delete "$t" --cleanup-tag -y || true
+          done
+      - name: Update Homebrew tap
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$TAP_DEPLOY_KEY" ]; then
+            echo "::warning::TAP_DEPLOY_KEY not set — built & released, but skipping the tap update."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+          x=$(sha256sum art/amdl-x86_64-unknown-linux-musl.tar.gz | awk '{print $1}')
+          a=$(sha256sum art/amdl-aarch64-unknown-linux-musl.tar.gz | awk '{print $1}')
+          sed -e "s/@VERSION@/${VERSION}/g" -e "s/@X86_SHA@/${x}/g" -e "s/@ARM_SHA@/${a}/g" \
+            ci/amdl.rb.tmpl > /tmp/amdl.rb
+          git clone git@github.com:jakobhviid/homebrew-tap tap
+          mkdir -p tap/Formula
+          cp /tmp/amdl.rb tap/Formula/amdl.rb
+          cd tap
+          git config user.name "tap-bot"
+          git config user.email "tap-bot@users.noreply.github.com"
+          git add Formula/amdl.rb
+          git commit -m "amdl ${VERSION}" || { echo "no formula change"; exit 0; }
+          git push
