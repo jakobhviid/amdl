@@ -15,7 +15,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const BROWSER_LIST: &str = "Chrome, Chromium, Firefox, Brave, or Vivaldi";
+#[cfg(target_os = "macos")]
+const BROWSER_LIST: &str = "Safari, Chrome, Firefox, Brave, Edge, Arc, or Vivaldi";
+#[cfg(not(target_os = "macos"))]
+const BROWSER_LIST: &str = "Chrome, Chromium, Firefox, Brave, Vivaldi, Edge, or Arc";
 
 pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
     if !refresh {
@@ -247,13 +250,19 @@ fn expired(path: &Path) -> bool {
 /// Try each supported browser; return (browser, netscape-text, count) or None.
 fn extract_from_browser() -> Option<(String, String, usize)> {
     let domains = Some(vec!["apple.com".to_string()]);
-    let tries = [
+    #[allow(unused_mut)]
+    let mut tries = vec![
         ("Chrome", rookie::chrome(domains.clone())),
         ("Chromium", rookie::chromium(domains.clone())),
         ("Firefox", rookie::firefox(domains.clone())),
         ("Brave", rookie::brave(domains.clone())),
         ("Vivaldi", rookie::vivaldi(domains.clone())),
+        ("Edge", rookie::edge(domains.clone())),
+        ("Arc", rookie::arc(domains.clone())),
     ];
+    // Safari is macOS-only (its API is cfg'd to macos in rookie).
+    #[cfg(target_os = "macos")]
+    tries.push(("Safari", rookie::safari(domains.clone())));
     for (name, res) in tries {
         if let Ok(cookies) = res {
             if !cookies.is_empty() {

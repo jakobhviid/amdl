@@ -16,7 +16,7 @@ knobs are flags, and output defaults to the current folder.
 ## Install
 
 ```sh
-brew install jakobhviid/tap/amdl        # Linux; pulls gamdl + ffmpeg as deps
+brew install jakobhviid/tap/amdl        # macOS & Linux; pulls gamdl + ffmpeg as deps
 ```
 
 Or build from source (needs Rust):
@@ -35,7 +35,7 @@ gamdl needs a browser login session to fetch. amdl helps resolve one, in order:
 1. `--cookies <file>` if you pass one,
 2. gamdl's own `~/.gamdl/cookies.txt` — **if it isn't expired**,
 3. **auto-extracted from an installed browser** — Chrome, Chromium, Firefox,
-   Brave, or Vivaldi,
+   Brave, Vivaldi, Edge, Arc, and (on macOS) **Safari**,
 4. if the file/browser cookies look **expired**, or none are found: it warns you
    to log in again at `https://music.apple.com` in one of those browsers, then
    retries.
@@ -43,6 +43,10 @@ gamdl needs a browser login session to fetch. amdl helps resolve one, in order:
 amdl never writes to `~/.gamdl`; browser cookies are cached under
 `~/.cache/amdl/` and passed to gamdl via `--cookies-path`. Run `amdl cookies` to
 check what amdl would use, without downloading anything.
+
+> **macOS:** reading cookies from a Chromium browser (Chrome/Brave/Edge/Arc)
+> needs the "Chrome Safe Storage" key from your login Keychain — macOS may prompt
+> for access the first time. Safari and Firefox need no prompt.
 
 ### Headless / server (no browser)
 

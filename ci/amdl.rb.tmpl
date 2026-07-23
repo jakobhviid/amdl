@@ -7,6 +7,17 @@ class Amdl < Formula
   depends_on "ffmpeg"
   depends_on "gamdl"
 
+  on_macos do
+    on_intel do
+      url "https://github.com/jakobhviid/amdl/releases/download/v@VERSION@/amdl-x86_64-apple-darwin.tar.gz"
+      sha256 "@MAC_X86_SHA@"
+    end
+    on_arm do
+      url "https://github.com/jakobhviid/amdl/releases/download/v@VERSION@/amdl-aarch64-apple-darwin.tar.gz"
+      sha256 "@MAC_ARM_SHA@"
+    end
+  end
+
   on_linux do
     on_intel do
       url "https://github.com/jakobhviid/amdl/releases/download/v@VERSION@/amdl-x86_64-unknown-linux-musl.tar.gz"
@@ -25,7 +36,9 @@ class Amdl < Formula
   end
 
   def caveats
-    "amdl is Linux-only. Acquisition is handled by gamdl — configure it per its own terms."
+    "Acquisition is handled by gamdl — install/configure it per its own terms. " \
+      "amdl auto-detects Apple Music cookies from your browser (Safari/Chrome/Firefox/…); " \
+      "on a headless host, pass them with `--cookies -`."
   end
 
   test do
