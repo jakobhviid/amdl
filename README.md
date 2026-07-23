@@ -33,11 +33,16 @@ cargo build --release                   # → ./target/release/amdl
 gamdl needs a browser login session to fetch. amdl helps resolve one, in order:
 
 1. `--cookies <file>` if you pass one,
-2. gamdl's own `~/.gamdl/cookies.txt`,
+2. gamdl's own `~/.gamdl/cookies.txt` — **if it isn't expired**,
 3. **auto-extracted from an installed browser** — Chrome, Chromium, Firefox,
    Brave, or Vivaldi,
-4. if none: it asks you to log in at `https://music.apple.com` in one of those
-   browsers, then retries.
+4. if the file/browser cookies look **expired**, or none are found: it warns you
+   to log in again at `https://music.apple.com` in one of those browsers, then
+   retries.
+
+amdl never writes to `~/.gamdl`; browser cookies are cached under
+`~/.cache/amdl/` and passed to gamdl via `--cookies-path`. Run `amdl cookies` to
+check what amdl would use, without downloading anything.
 
 ## Commands
 
@@ -50,6 +55,7 @@ amdl <command> [options]
 | `download <url>…` | Fetch via gamdl, then validate → Opus → into your library (default: CWD). |
 | `convert <src> [dest]` | Transcode an existing library of `.m4a` to Opus (no login needed). |
 | `recover <dir>` | *(planned)* Re-acquire broken/missing library files by their metadata. |
+| `cookies` | Report which login cookies amdl would use (gamdl's file + browser auto-detect), no download. |
 
 Common flags: `-o/--out <dir>` (default CWD), `--cookies`, `--bitrate 192k`,
 `-j/--jobs`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,

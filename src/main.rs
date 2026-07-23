@@ -67,6 +67,8 @@ enum Cmd {
     Recover {
         dir: PathBuf,
     },
+    /// Check login cookies: report gamdl's file and auto-detect from your browser.
+    Cookies,
     /// Print a shell completion script (bash|zsh|fish|…) to stdout.
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -97,7 +99,7 @@ fn cmd_download(
     storefronts: Vec<String>,
     no_convert: bool,
 ) -> Result<()> {
-    let cookies = cookies::resolve(cookies)?;
+    let cookies = cookies::resolve(cookies, false)?;
     std::fs::create_dir_all(&work_dir)?;
     std::fs::create_dir_all(&out)?;
     for url in &urls {
@@ -174,6 +176,7 @@ fn main() -> Result<()> {
             ui::info("(needs the catalog-search + track-matching port).");
             Ok(())
         }
+        Cmd::Cookies => cookies::diagnose(),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "amdl", &mut std::io::stdout());
             Ok(())
