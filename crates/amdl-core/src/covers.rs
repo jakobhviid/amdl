@@ -253,3 +253,44 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn albums_group_across_discs_and_case() {
+        // multi-disc + editions + case + punctuation all collapse to one key
+        let a = norm_album("The Very Best of Pop 1989-90");
+        assert_eq!(a, norm_album("The Very Best of Pop 1989-90 [Disc 2]"));
+        assert_eq!(a, norm_album("the  very best of pop 1989-90 (Deluxe Edition)"));
+        assert_ne!(a, norm_album("The Very Best of Pop 1991-92"));
+    }
+
+    fn jpeg_of(w: u32, h: u32) -> Picture {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([120, 30, 30]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .unwrap();
+        Picture::new_unchecked(PictureType::CoverFront, Some(MimeType::Jpeg), None, buf)
+    }
+
+    #[test]
+    fn cover_too_small_is_rejected() {
+        assert!(validate_and_square(&jpeg_of(100, 100), 250).is_none());
+    }
+
+    #[test]
+    fn wide_cover_is_center_cropped_square() {
+        let out = validate_and_square(&jpeg_of(600, 400), 250).expect("valid");
+        let img = image::load_from_memory(out.data()).unwrap();
+        assert_eq!(img.width(), img.height(), "cropped to square");
+        assert_eq!(img.width(), 400, "square side = min edge");
+    }
+
+    #[test]
+    fn square_cover_passes_through() {
+        assert!(validate_and_square(&jpeg_of(500, 500), 250).is_some());
+    }
+}

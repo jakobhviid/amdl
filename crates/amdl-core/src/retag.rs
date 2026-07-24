@@ -120,3 +120,16 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Edit;
+
+    #[test]
+    fn noop_guard() {
+        assert!(Edit::default().is_noop());
+        assert!(!Edit { compilation: true, ..Default::default() }.is_noop());
+        assert!(!Edit { album: Some("x".into()), ..Default::default() }.is_noop());
+        assert!(!Edit { artist: Some("y".into()), ..Default::default() }.is_noop());
+    }
+}

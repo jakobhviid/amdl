@@ -117,3 +117,18 @@ pub fn finalize_opus(opus: &Path, cover: Option<&Picture>) -> Result<bool> {
         .with_context(|| format!("save tags to {}", opus.display()))?;
     Ok(embedded)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_junk_key;
+
+    #[test]
+    fn strips_itunes_junk_keeps_real_tags() {
+        for k in ["iTunSMPB", "iTunNORM", "----:com.apple.iTunes:CT", "major_brand", "encoder"] {
+            assert!(is_junk_key(k), "{k} should be junk");
+        }
+        for k in ["ARTIST", "ALBUM", "TITLE", "MUSICBRAINZ_ALBUMID", "ALBUMARTIST"] {
+            assert!(!is_junk_key(k), "{k} should be kept");
+        }
+    }
+}
