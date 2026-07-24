@@ -57,6 +57,19 @@ amdl lyrics /music/lib --json   # {ok_synced, ok_plain, not_found, instrumental,
 
 A large `not_found` count is normal for niche/Danish catalogs — not a failure.
 
+### tag — compilation grouping
+
+A Various-Artists album whose track artists differ (or are blank) scatters in the
+player. Group it as one album:
+
+```sh
+amdl tag "/music/lib/Compilations/Some VA Album" --compilation   # albumartist=Various Artists, compilation=1
+amdl tag "/music/lib/Artist/Album" --album "Real Album" --album-artist "Artist"   # fix fields
+amdl tag <path> --compilation --dry-run                          # preview
+```
+
+Applies to every audio file under the path; existing tags are preserved.
+
 *Resumability (W9):* if a run dies mid-way, just run the same command again —
 finished files are skipped. The one trap this creates — a half-written `.opus`
 that *looks* done — is caught by `doctor` (W3).

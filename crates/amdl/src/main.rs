@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, covers, doctor, download, lyrics, ui, validate};
+use amdl_core::{config, convert, cookies, covers, doctor, download, lyrics, retag, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -96,6 +96,27 @@ enum Cmd {
         /// Parallel lookups (LRCLIB tolerates ~10).
         #[arg(short, long, default_value_t = 8)]
         jobs: usize,
+    },
+    /// Set tags across a file/folder. `--compilation` groups a Various-Artists
+    /// album (albumartist=Various Artists + compilation=1); also set album/artist.
+    Tag {
+        /// File or directory to retag (all audio under a dir).
+        path: PathBuf,
+        /// Group as a Various-Artists compilation.
+        #[arg(long)]
+        compilation: bool,
+        /// Set the album.
+        #[arg(long)]
+        album: Option<String>,
+        /// Set the album artist.
+        #[arg(long = "album-artist")]
+        album_artist: Option<String>,
+        /// Set the (track) artist.
+        #[arg(long)]
+        artist: Option<String>,
+        /// Preview without writing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Show config path + values; `--init` writes a starter ~/.config/amdl/config.toml.
     Config {
@@ -319,6 +340,24 @@ fn main() -> Result<()> {
                 ));
             }
             Ok(())
+        }
+        Cmd::Tag { path, compilation, album, album_artist, artist, dry_run } => {
+            let edit = retag::Edit { compilation, album, album_artist, artist };
+            if edit.is_noop() {
+                ui::warn("nothing to set — pass --compilation and/or --album/--artist/--album-artist");
+                Ok(())
+            } else {
+                let r = retag::run(&path, &edit, dry_run);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&r)?);
+                } else {
+                    ui::ok(&format!(
+                        "tagged {} of {} (failed {}){}",
+                        r.changed, r.total, r.failed, if r.dry_run { " [dry-run]" } else { "" }
+                    ));
+                }
+                Ok(())
+            }
         }
         Cmd::Config { init } => {
             let p = config::path();

@@ -12,6 +12,7 @@ pub mod covers;
 pub mod doctor;
 pub mod download;
 pub mod lyrics;
+pub mod retag;
 pub mod tags;
 pub mod ui;
 pub mod validate;
