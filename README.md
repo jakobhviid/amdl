@@ -15,8 +15,19 @@ knobs are flags, and output defaults to the current folder.
 
 ## Install
 
+**Homebrew** (macOS & Linux) — pours a prebuilt bottle on x86_64 Linux, so no
+compiler/build tools are needed; pulls `gamdl` + `ffmpeg` as deps:
+
 ```sh
-brew install jakobhviid/tap/amdl        # macOS & Linux; pulls gamdl + ffmpeg as deps
+brew install jakobhviid/tap/amdl
+```
+
+**Or paste one line** — no Homebrew, no compiler, no root (installs to
+`~/.local/bin`). Fetches only the `amdl` binary — install `gamdl` + `ffmpeg`
+separately:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jakobhviid/amdl/main/install.sh | sh
 ```
 
 Or build from source (needs Rust):
