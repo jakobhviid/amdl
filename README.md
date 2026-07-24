@@ -97,6 +97,7 @@ amdl <command> [options]
 | `download <url>…` | Fetch via gamdl, then validate → Opus → into your library. |
 | `convert [src] [dest]` | Transcode `.m4a`/`.mp3` → Opus with **fidelity**: re-embeds the source cover as a real `METADATA_BLOCK_PICTURE`, strips iTunes junk, mirrors `.lrc`, skip-existing (resumable). Paths default to config. |
 | `doctor [output]` | Health/integrity scan: missing covers/tags, unreadable, and — with `--source` — **truncated** (decoded vs source duration) + **unconverted** source files. |
+| `covers [output]` | Backfill missing covers: copy-from-source + cross-library (`--reference`), validated + square-cropped, per album; numbered straggler list for the rest. `--dry-run`. |
 | `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |
 | `recover <dir>` | *(planned)* Re-acquire broken/missing library files by their metadata. |
 | `cookies` | Report which login cookies amdl would use, no download. |
@@ -123,15 +124,18 @@ one). Full recipes in **[WORKFLOWS.md](WORKFLOWS.md)**.
 
 ## Status / roadmap
 
-**Done:** `download`, `convert` with real cover embedding + junk-strip + `.lrc`
-mirroring + skip-existing, the `doctor` health/integrity scan, `--json`, the
-`amdl-core` library crate, and lazy config. Parallel throughout, animated bars.
+**Done:** `download`; `convert` with real cover embedding + junk-strip + `.lrc`
+mirroring + skip-existing; the `doctor` health/integrity scan; `covers` backfill
+(copy-from-source + cross-library, validated + square-cropped, dry-run, straggler
+list); `--json`; the `amdl-core` library crate; and lazy config. Parallel
+throughout, animated bars.
 
 **Planned** (ported from the original Python tool, adapted to the generic
-source→output model): `covers` (multi-source waterfall + compilation handling +
-safety gates + human tail), `lyrics` (LRCLIB backfill), `recover` (detect →
-metadata fallback → cross-library copy → re-acquire), `identify` (AcoustID),
-first-class `tag` ops, and Navidrome delivery. See [WORKFLOWS.md](WORKFLOWS.md).
+source→output model): `covers` **network passes** (MusicBrainz/CAA → iTunes →
+Discogs waterfall + numbered "paste a URL" human tail), `lyrics` (LRCLIB),
+`recover` (detect → metadata fallback → cross-library copy → re-acquire),
+`identify` (AcoustID), first-class `tag` ops, and Navidrome delivery. See
+[WORKFLOWS.md](WORKFLOWS.md).
 
 ## License
 

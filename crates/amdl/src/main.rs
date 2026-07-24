@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, doctor, download, ui, validate};
+use amdl_core::{config, convert, cookies, covers, doctor, download, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -69,6 +69,24 @@ enum Cmd {
         /// Compare against this source tree to also find truncated + unconverted files.
         #[arg(short, long)]
         source: Option<PathBuf>,
+    },
+    /// Backfill missing Opus cover art: copy from source, then cross-library
+    /// (--reference). Prints a numbered straggler list for albums still uncovered.
+    Covers {
+        /// Output/derived library to fill (default: config [paths] output).
+        output: Option<PathBuf>,
+        /// Source tree to copy embedded art from (default: config [paths] source).
+        #[arg(short, long)]
+        source: Option<PathBuf>,
+        /// Other output libraries to borrow matching-album covers from.
+        #[arg(short, long)]
+        reference: Vec<PathBuf>,
+        /// Show what would change without writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Minimum acceptable cover edge (px).
+        #[arg(long, default_value_t = 250)]
+        min_dim: u32,
     },
     /// Show config path + values; `--init` writes a starter ~/.config/amdl/config.toml.
     Config {
@@ -180,6 +198,25 @@ fn print_health(h: &doctor::Health) {
     }
 }
 
+fn print_covers(r: &covers::Report) {
+    let tag = if r.dry_run { " (dry-run)" } else { "" };
+    ui::info(&format!("coverless albums: {}{}", r.coverless_albums, tag));
+    if r.filled_from_source + r.filled_from_reference > 0 {
+        ui::ok(&format!(
+            "filled {} album(s) — {} tracks from source, {} from reference",
+            r.albums_filled, r.filled_from_source, r.filled_from_reference
+        ));
+    }
+    if !r.stragglers.is_empty() {
+        ui::warn(&format!("{} album(s) still need a cover (paste a URL per number, once `covers` gains that pass):", r.stragglers.len()));
+        for s in &r.stragglers {
+            println!("  {:>3}. {} — {} ({} tracks)", s.n, s.album, s.artist, s.tracks);
+        }
+    } else if r.coverless_albums > 0 {
+        ui::ok("all coverless albums resolved");
+    }
+}
+
 /// Restore default SIGPIPE so piping output into `head`/`less` exits quietly.
 fn reset_sigpipe() {
     #[cfg(unix)]
@@ -240,6 +277,21 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&h)?);
             } else {
                 print_health(&h);
+            }
+            Ok(())
+        }
+        Cmd::Covers { output, source, reference, dry_run, min_dim } => {
+            let cfg = config::load();
+            let output = output
+                .or(cfg.paths.output.clone())
+                .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
+            let source = source.or(cfg.paths.source.clone());
+            let opts = covers::Opts { source, references: reference, dry_run, min_dim };
+            let r = covers::backfill(&output, &opts);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                print_covers(&r);
             }
             Ok(())
         }

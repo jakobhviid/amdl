@@ -8,6 +8,7 @@
 pub mod config;
 pub mod convert;
 pub mod cookies;
+pub mod covers;
 pub mod doctor;
 pub mod download;
 pub mod tags;

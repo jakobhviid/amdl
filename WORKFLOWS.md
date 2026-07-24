@@ -82,16 +82,36 @@ Deleting derived output files is fine; **never delete source originals.**
 
 ---
 
-## Cover art, lyrics, recovery, identification — planned
+## W4 — Cover backfill (funnel; cheapest+safest first)
 
-These are on the roadmap (ported from the original Python tool, adapted to the
-generic source→output model). They are **not yet implemented**; today, use the
-Python tool + scripts for them. Planned commands and shape:
+Backfill missing Opus covers. Run as a funnel so each pass shrinks the problem
+before the next. **Implemented today:** the two free, always-correct passes plus
+the human straggler list; every embedded image is validated (decodes, min edge)
+and square-cropped, and only *coverless* tracks are touched (a blank cover beats
+a wrong one). Covers apply per normalized album (multi-disc/editions group).
 
-- **`covers`** — backfill missing covers via an ordered, safety-gated waterfall:
-  copy-from-source → cross-library copy (`--reference <other-output-dir>…`) →
-  Cover Art Archive/MusicBrainz → iTunes → Discogs, then a numbered human "paste a
-  URL" tail. Dry-run + STRONG/MAYBE/NONE confidence; a blank cover beats a wrong one.
+```sh
+# 1. copy-from-source: the source file still had art convert didn't need
+amdl covers /music/lib --source /music/originals
+# 2. cross-library: a sibling library already has the same album covered (free, correct)
+amdl covers /music/lib --reference /music/otherlib --reference /music/third
+# both passes in one go, preview first:
+amdl covers /music/lib --source /music/originals --reference /music/otherlib --dry-run
+amdl covers /music/lib --source /music/originals --reference /music/otherlib --json | jq '.stragglers'
+```
+
+Whatever's left is a **numbered straggler list** (album, artist, track count,
+impact-sorted) — the genuine long tail. The network waterfall
+(MusicBrainz/CAA → iTunes → Discogs) and the "paste a URL per number" human pass
+are **planned** (below); until then, resolve stragglers with the Python tool.
+
+## lyrics, recovery, identification — planned
+
+On the roadmap (ported from the original Python tool, adapted to source→output).
+**Not yet implemented**; use the Python tool + scripts for these:
+
+- **`covers` network passes** — MB/CAA → iTunes → Discogs auto-waterfall
+  (confidence-gated, generic-title guard) + numbered "paste a URL" human tail.
 - **`lyrics`** — LRCLIB backfill, writing `.lrc` into the output (works even when
   the source is read-only).
 - **`recover`** — detect broken/unconverted → resolve metadata (tags, else
