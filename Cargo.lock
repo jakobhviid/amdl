@@ -68,6 +68,7 @@ dependencies = [
  "clap_mangen",
  "ctrlc",
  "indicatif",
+ "libc",
  "num_cpus",
  "rayon",
  "rookie",

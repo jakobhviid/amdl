@@ -157,7 +157,17 @@ fn cmd_download(
     Ok(())
 }
 
+/// Restore default SIGPIPE so piping output into `head`/`less` exits quietly
+/// instead of panicking on a broken pipe (Rust ignores SIGPIPE by default).
+fn reset_sigpipe() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 fn main() -> Result<()> {
+    reset_sigpipe();
     let _ = ctrlc::set_handler(|| {
         eprintln!("\nCancelled.");
         std::process::exit(0);
