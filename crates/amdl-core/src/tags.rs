@@ -55,6 +55,12 @@ pub fn read_basic(path: &Path) -> Basic {
     }
 }
 
+/// Track duration in whole seconds (from the decoded audio properties).
+pub fn duration_secs(path: &Path) -> Option<u64> {
+    let tagged = open(path)?;
+    Some(tagged.properties().duration().as_secs())
+}
+
 pub fn has_cover(path: &Path) -> bool {
     open(path)
         .map(|t| t.tags().iter().any(|tag| !tag.pictures().is_empty()))

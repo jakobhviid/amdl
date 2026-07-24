@@ -35,6 +35,28 @@ amdl convert                                       # uses config [paths]
 amdl convert /music/originals /music/lib --json    # {converted, skipped, failed, with_cover, lrc_copied}
 ```
 
+Convert and `lyrics` (below) touch different outputs (`.opus` vs `.lrc`) and are
+CPU- vs network-bound, so running them in parallel halves wall-clock:
+
+```sh
+amdl convert /music/originals /music/lib &        # CPU-bound (ffmpeg×N)
+amdl lyrics  /music/lib &                          # network-bound (LRCLIB)
+wait
+```
+
+### lyrics — LRCLIB backfill (state-only)
+
+For every track missing a sibling `.lrc`, fetch synced (preferred) or plain
+lyrics and write the `.lrc` into the library. Skip-existing, parallel; writes
+only into the output, so it's safe when the source is read-only.
+
+```sh
+amdl lyrics /music/lib
+amdl lyrics /music/lib --json   # {ok_synced, ok_plain, not_found, instrumental, no_meta, skipped}
+```
+
+A large `not_found` count is normal for niche/Danish catalogs — not a failure.
+
 *Resumability (W9):* if a run dies mid-way, just run the same command again —
 finished files are skipped. The one trap this creates — a half-written `.opus`
 that *looks* done — is caught by `doctor` (W3).
@@ -105,15 +127,13 @@ impact-sorted) — the genuine long tail. The network waterfall
 (MusicBrainz/CAA → iTunes → Discogs) and the "paste a URL per number" human pass
 are **planned** (below); until then, resolve stragglers with the Python tool.
 
-## lyrics, recovery, identification — planned
+## recovery, identification — planned
 
 On the roadmap (ported from the original Python tool, adapted to source→output).
 **Not yet implemented**; use the Python tool + scripts for these:
 
 - **`covers` network passes** — MB/CAA → iTunes → Discogs auto-waterfall
   (confidence-gated, generic-title guard) + numbered "paste a URL" human tail.
-- **`lyrics`** — LRCLIB backfill, writing `.lrc` into the output (works even when
-  the source is read-only).
 - **`recover`** — detect broken/unconverted → resolve metadata (tags, else
   folder/sibling) → cross-library copy if a reference has it, else re-acquire via
   gamdl → place in output, retagged to group with its album siblings.

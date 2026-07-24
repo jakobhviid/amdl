@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, covers, doctor, download, ui, validate};
+use amdl_core::{config, convert, cookies, covers, doctor, download, lyrics, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -87,6 +87,15 @@ enum Cmd {
         /// Minimum acceptable cover edge (px).
         #[arg(long, default_value_t = 250)]
         min_dim: u32,
+    },
+    /// Backfill .lrc lyrics from LRCLIB (synced preferred). Writes into the
+    /// library only (state-only); skip-existing.
+    Lyrics {
+        /// Library to backfill (default: config [paths] output).
+        output: Option<PathBuf>,
+        /// Parallel lookups (LRCLIB tolerates ~10).
+        #[arg(short, long, default_value_t = 8)]
+        jobs: usize,
     },
     /// Show config path + values; `--init` writes a starter ~/.config/amdl/config.toml.
     Config {
@@ -292,6 +301,22 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
                 print_covers(&r);
+            }
+            Ok(())
+        }
+        Cmd::Lyrics { output, jobs } => {
+            let cfg = config::load();
+            let output = output
+                .or(cfg.paths.output.clone())
+                .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
+            let r = lyrics::backfill(&output, jobs);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                ui::ok(&format!(
+                    "synced {} · plain {} · not-found {} · instrumental {} · no-meta {} · skipped {}",
+                    r.ok_synced, r.ok_plain, r.not_found, r.instrumental, r.no_meta, r.skipped
+                ));
             }
             Ok(())
         }
