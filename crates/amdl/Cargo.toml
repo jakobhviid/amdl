@@ -1,0 +1,21 @@
+[package]
+name = "amdl"
+description = "Music-library harness: validate, transcode to Opus, tag, cover, and keep a library consistent. Wraps gamdl + ffmpeg."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "amdl"
+path = "src/main.rs"
+
+[dependencies]
+amdl-core = { path = "../amdl-core" }
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+anyhow = "1"
+ctrlc = "3"
+libc = "0.2"
+num_cpus = "1"
+serde_json = "1"

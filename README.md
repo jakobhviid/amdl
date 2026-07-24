@@ -5,8 +5,15 @@ A **music-library harness**: it validates audio, transcodes to space-efficient
 large collection stays clean and uniform. It's a thin wrapper around
 [`gamdl`](https://github.com/glomatico/gamdl) and `ffmpeg`; **amdl's value is the
 harness *around* those tools** — the validation, conversion, tagging, and
-library-maintenance pipeline — not the acquisition. **No config file:** paths and
-knobs are flags, and output defaults to the current folder.
+library-maintenance pipeline — not the acquisition.
+
+**Composable by design.** All logic lives in the reusable **`amdl-core`** crate,
+and every batch command can emit machine-readable **`--json`**, so scripts and
+agents can chain steps and decide between them. Config is optional — a lazy
+`~/.config/amdl/config.toml` only holds durable defaults (see `amdl config`).
+Source directories are treated as **read-only input**; everything is written to
+the **output** directory. See **[WORKFLOWS.md](WORKFLOWS.md)** for end-to-end
+recipes (build a library, health-scan, repair truncation).
 
 > **Acquisition is [gamdl](https://github.com/glomatico/gamdl)'s job, not amdl's.**
 > amdl orchestrates gamdl and processes whatever it produces into a tidy library.
@@ -87,35 +94,44 @@ amdl <command> [options]
 
 | Command | What it does |
 |---------|--------------|
-| `download <url>…` | Fetch via gamdl, then validate → Opus → into your library (default: CWD). |
-| `convert <src> [dest]` | Transcode an existing library of `.m4a` to Opus (no login needed). |
+| `download <url>…` | Fetch via gamdl, then validate → Opus → into your library. |
+| `convert [src] [dest]` | Transcode `.m4a`/`.mp3` → Opus with **fidelity**: re-embeds the source cover as a real `METADATA_BLOCK_PICTURE`, strips iTunes junk, mirrors `.lrc`, skip-existing (resumable). Paths default to config. |
+| `doctor [output]` | Health/integrity scan: missing covers/tags, unreadable, and — with `--source` — **truncated** (decoded vs source duration) + **unconverted** source files. |
+| `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |
 | `recover <dir>` | *(planned)* Re-acquire broken/missing library files by their metadata. |
-| `cookies` | Report which login cookies amdl would use (gamdl's file + browser auto-detect), no download. |
+| `cookies` | Report which login cookies amdl would use, no download. |
 
-Common flags: `-o/--out <dir>` (default CWD), `--cookies`, `--bitrate 192k`,
-`-j/--jobs`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,
-`--no-convert`. Also `--version`, `--help`, shell completions, man page.
+`--json` (global) makes `convert`/`doctor`/`config` emit machine-readable output
+for scripting. Common flags: `--bitrate 192k`, `-j/--jobs`, `-o/--out`,
+`--cookies`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,
+`--no-convert`. Also `--version`, `--help`, shell completions, and a man page per
+command (`man amdl`, `man amdl-convert` where installed).
 
 ## Typical use
 
 ```sh
-cd ~/Music/opus
-amdl download 'https://music.apple.com/dk/album/…'   # → Opus here, cookies auto-detected
-amdl download 'https://music.apple.com/…' --bitrate 128k -j 12
-amdl convert ~/Music/m4a ~/Music/opus                # transcode an existing library
+amdl config --init                         # optional: set default source/output once
+amdl convert ~/Music/originals ~/Music/lib # m4a/mp3 → Opus (covers, lyrics, junk-stripped)
+amdl doctor ~/Music/lib --source ~/Music/originals   # what still needs fixing
+amdl doctor ~/Music/lib --json | jq '.truncated'     # feed a script/agent
+amdl download 'https://music.apple.com/dk/album/…' -o ~/Music/lib   # acquire + convert
 ```
+
+Repair a truncated Opus (silent-disconnect damage): `doctor` finds it → delete
+the bad `.opus` → re-run `convert` (skip-existing regenerates only the deleted
+one). Full recipes in **[WORKFLOWS.md](WORKFLOWS.md)**.
 
 ## Status / roadmap
 
-MVP: `download` + `convert` with parallel conversion, progress bars, storefront
-fallback, and cookie auto-detection. **Being ported from the original Python
-tool** and refined with a real test corpus:
+**Done:** `download`, `convert` with real cover embedding + junk-strip + `.lrc`
+mirroring + skip-existing, the `doctor` health/integrity scan, `--json`, the
+`amdl-core` library crate, and lazy config. Parallel throughout, animated bars.
 
-- precise tag handling (keep Picard/MusicBrainz tags, strip iTunes junk) and cover
-  art as a spec-correct `METADATA_BLOCK_PICTURE` — first cut copies metadata via
-  `ffmpeg -map_metadata`;
-- `recover` (metadata → re-acquire), and later `lyrics`, Navidrome delivery, and
-  playlist sync.
+**Planned** (ported from the original Python tool, adapted to the generic
+source→output model): `covers` (multi-source waterfall + compilation handling +
+safety gates + human tail), `lyrics` (LRCLIB backfill), `recover` (detect →
+metadata fallback → cross-library copy → re-acquire), `identify` (AcoustID),
+first-class `tag` ops, and Navidrome delivery. See [WORKFLOWS.md](WORKFLOWS.md).
 
 ## License
 

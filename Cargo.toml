@@ -1,24 +1,12 @@
-[package]
-name = "amdl"
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "A music-library harness: validate, transcode to Opus, tag, and keep a library consistent. Wraps gamdl + ffmpeg."
-
-[[bin]]
-name = "amdl"
-path = "src/main.rs"
-
-[dependencies]
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
-clap_mangen = "0.2"
-anyhow = "1"
-ctrlc = "3"
-libc = "0.2"
-rookie = "0.5"
-indicatif = "0.17"
-rayon = "1"
-num_cpus = "1"
+license = "MIT"
+homepage = "https://github.com/jakobhviid/amdl"
 
 [profile.release]
 opt-level = 3
