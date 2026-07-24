@@ -80,6 +80,13 @@ jobs:
           base=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([0-9]+\.[0-9]+).*/\1/')
           VERSION="${base}.$(git rev-list --count HEAD)"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          # Repackage the prebuilt x86_64 Linux binary as a Homebrew bottle so
+          # `brew install` POURS it (no build-from-source, no C compiler gate).
+          keg="amdl/${VERSION}"
+          rm -rf bottlestage && mkdir -p "bottlestage/${keg}/bin"
+          tar xzf art/amdl-x86_64-unknown-linux-musl.tar.gz -C "bottlestage/${keg}/bin"
+          ( cd bottlestage && tar czf "../art/amdl-${VERSION}.x86_64_linux.bottle.tar.gz" amdl )
+          echo "BOTTLE_SHA=$(sha256sum "art/amdl-${VERSION}.x86_64_linux.bottle.tar.gz" | awk '{print $1}')" >> "$GITHUB_ENV"
           gh release create "v$VERSION" art/*.tar.gz \
             --title "v$VERSION" --notes "Automated build from ${GITHUB_SHA:0:7}" \
             || gh release upload "v$VERSION" art/*.tar.gz --clobber
@@ -105,6 +112,7 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"
           sha() { sha256sum "art/amdl-$1.tar.gz" | awk '{print $1}'; }
           sed -e "s/@VERSION@/${VERSION}/g" \
+            -e "s/@BOTTLE_SHA@/${BOTTLE_SHA}/g" \
             -e "s/@X86_SHA@/$(sha x86_64-unknown-linux-musl)/g" \
             -e "s/@ARM_SHA@/$(sha aarch64-unknown-linux-musl)/g" \
             -e "s/@MAC_X86_SHA@/$(sha x86_64-apple-darwin)/g" \
