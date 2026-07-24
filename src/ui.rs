@@ -53,14 +53,18 @@ pub fn spinner(msg: &str) -> ProgressBar {
     pb
 }
 
-/// A determinate bar for N-item work (per-track convert / validate).
+/// A determinate bar for N-item work (per-track convert / validate). Animates
+/// via a steady tick (spinner + elapsed) so it reads as live even while parallel
+/// work is in flight, and leads with the count ("Converting 3/12").
 pub fn bar(len: u64, msg: &str) -> ProgressBar {
     let pb = ProgressBar::new(len);
     pb.set_style(
-        ProgressStyle::with_template("{msg} [{bar:30.cyan/blue}] {pos}/{len} ({elapsed})")
+        ProgressStyle::with_template("  {spinner:.cyan} {msg} {pos}/{len} [{bar:24.cyan/blue}] {elapsed}")
             .unwrap()
-            .progress_chars("=>-"),
+            .progress_chars("=>-")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
     pb.set_message(msg.to_string());
+    pb.enable_steady_tick(Duration::from_millis(90));
     pb
 }

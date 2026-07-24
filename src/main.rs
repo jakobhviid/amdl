@@ -9,6 +9,7 @@ mod validate;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use rayon::prelude::*;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -112,7 +113,20 @@ fn cmd_download(
         };
         let tracks = download::download(url, &opts)?;
 
-        let bad: Vec<_> = tracks.iter().filter(|t| !validate::probe_ok(t)).collect();
+        // Decode-check every downloaded track in parallel, with a progress bar.
+        let bad: Vec<PathBuf> = {
+            let pb = ui::bar(tracks.len() as u64, "Validating");
+            let bad = tracks
+                .par_iter()
+                .filter_map(|t| {
+                    let ok = validate::probe_ok(t);
+                    pb.inc(1);
+                    (!ok).then(|| t.clone())
+                })
+                .collect();
+            pb.finish_and_clear();
+            bad
+        };
         if !bad.is_empty() {
             ui::warn(&format!("{} track(s) failed the decode check (likely encrypted-payload bug)", bad.len()));
             for b in &bad {

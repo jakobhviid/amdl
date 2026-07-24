@@ -26,7 +26,7 @@ pub fn convert_files(files: &[PathBuf], base: &Path, dest: &Path, bitrate: &str,
         ui::warn("nothing to convert");
         return Ok(0);
     }
-    let pb = ui::bar(files.len() as u64, "convert → opus");
+    let pb = ui::bar(files.len() as u64, "Converting → Opus");
     let pool = rayon::ThreadPoolBuilder::new().num_threads(jobs.max(1)).build()?;
     let done: usize = pool.install(|| {
         files
@@ -49,7 +49,7 @@ pub fn convert_files(files: &[PathBuf], base: &Path, dest: &Path, bitrate: &str,
             })
             .sum()
     });
-    pb.finish_with_message("converted");
+    pb.finish_and_clear();
     Ok(done)
 }
 

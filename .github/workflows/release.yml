@@ -82,9 +82,20 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           # Repackage the prebuilt x86_64 Linux binary as a Homebrew bottle so
           # `brew install` POURS it (no build-from-source, no C compiler gate).
+          # A poured bottle skips the formula's `install`, so the keg must already
+          # hold what install produces: binary + man page + completions.
           keg="amdl/${VERSION}"
-          rm -rf bottlestage && mkdir -p "bottlestage/${keg}/bin"
-          tar xzf art/amdl-x86_64-unknown-linux-musl.tar.gz -C "bottlestage/${keg}/bin"
+          bin="bottlestage/${keg}/bin"
+          man="bottlestage/${keg}/share/man/man1"
+          zc="bottlestage/${keg}/share/zsh/site-functions"
+          bc="bottlestage/${keg}/share/bash-completion/completions"
+          fc="bottlestage/${keg}/share/fish/vendor_completions.d"
+          rm -rf bottlestage && mkdir -p "$bin" "$man" "$zc" "$bc" "$fc"
+          tar xzf art/amdl-x86_64-unknown-linux-musl.tar.gz -C "$bin"
+          "$bin/amdl" man > "$man/amdl.1"
+          "$bin/amdl" completions zsh  > "$zc/_amdl"
+          "$bin/amdl" completions bash > "$bc/amdl"
+          "$bin/amdl" completions fish > "$fc/amdl.fish"
           ( cd bottlestage && tar czf "../art/amdl-${VERSION}.x86_64_linux.bottle.tar.gz" amdl )
           echo "BOTTLE_SHA=$(sha256sum "art/amdl-${VERSION}.x86_64_linux.bottle.tar.gz" | awk '{print $1}')" >> "$GITHUB_ENV"
           gh release create "v$VERSION" art/*.tar.gz \
