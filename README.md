@@ -115,6 +115,7 @@ amdl <command> [options]
 | `identify <path>` | Fix untagged/mis-tagged tracks by **sound** (AcoustID fingerprint via `fpcalc`); `--apply` writes artist/title/album only at/above `--min-score` (default 0.9 — a wrong tag is worse than none). `--dry-run`, `--skip-tagged`. Needs `[keys] acoustid`. |
 | `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl (verified on title+duration). Recovered tracks are **regrouped** to their album siblings (so they don't split out under Apple's own album tag). `--dry-run`. |
 | `dedup [output]` | **Surface** (never delete) redundant tracks: exact-duplicate recordings + subset editions (Standard ⊂ Deluxe), with paths to remove and which copy to keep. `--print-rm` emits `rm` lines for you to review. |
+| `undo` | Revert the last mutating run — deletes files amdl created, restores tags/covers it changed. Never clobbers edits you made since. `--list`, `<run-id>`, `--dry-run`. |
 | `cookies` | Report which login cookies amdl would use, no download. |
 
 `--json` (global) makes every batch command emit a machine-readable report
@@ -142,9 +143,9 @@ Repair a truncated Opus (silent-disconnect damage): `doctor` finds it → delete
 the bad `.opus` → re-run `convert` (skip-existing regenerates only the deleted
 one). Full recipes in **[WORKFLOWS.md](WORKFLOWS.md)**.
 
-## Status / roadmap
+## Status
 
-**Done:** `download`; `convert` (real cover embedding + junk-strip + `.lrc`
+amdl is **feature-complete**. `download`; `convert` (real cover embedding + junk-strip + `.lrc`
 mirroring + skip-existing, `.flac` input, and **copy-verbatim** when the source is
 already Opus); `doctor` health/integrity scan + `--deep` full-decode corruption
 check; **`covers`** — the full funnel (source → cross-library → `--online`
@@ -153,14 +154,15 @@ artist+album-gated, validated + square-cropped; `lyrics` (LRCLIB, state-only);
 `tag` (compilation grouping + setters); **`identify`** (AcoustID fingerprint,
 score-gated `--apply` + `--dry-run`); **`recover`** (cross-library copy + gamdl
 re-acquire, title+duration-verified, with sibling regrouping); **`dedup`**
-(duplicate/orphan surfacing, never deletes); `--json` everywhere and **`--llm`**
-(full agent guide); the `amdl-core` library crate; and lazy config (paths, Opus
-quality, API keys). Parallel throughout, animated progress bars.
+(duplicate/orphan surfacing, never deletes); **`undo`** (revert the last run —
+journaled by default, never clobbers your later edits); `--json` everywhere and
+**`--llm`** (full agent guide); the `amdl-core` library crate; and lazy config
+(paths, Opus quality, API keys). Parallel throughout, animated progress bars,
+severity-colored summaries with next-step hints.
 
-**Planned:** a first-class `undo` (revert the last run's writes). Delivery/serving
-is intentionally out of scope — that's your media server's job (Navidrome, say,
-auto-scans its library), and amdl stays a self-contained *file* harness.
-See [WORKFLOWS.md](WORKFLOWS.md).
+Delivery/serving is intentionally out of scope — that's your media server's job
+(Navidrome, say, auto-scans its library), and amdl stays a self-contained *file*
+harness. See [WORKFLOWS.md](WORKFLOWS.md) for end-to-end recipes.
 
 ## AI disclosure
 

@@ -311,7 +311,27 @@ Navidrome (or whatever) at the **output** Opus tree (never the read-only source)
 and let it scan — amdl deliberately stays a self-contained file harness and does
 not reach across the network into a server it doesn't own.
 
-## Undo — planned
+## W8 — Undo a run (`undo`)
 
-Every mutating command is idempotent and safe to re-run; a first-class `undo`
-(revert the last run's writes) is still on the roadmap.
+Every mutating command is **journaled by default**, so you can revert it. Undo
+deletes files amdl created (convert/lyrics/recover) and restores tags/covers it
+changed (tag/identify/covers/paste/regroup).
+
+```sh
+amdl undo                 # revert the most recent mutating run
+amdl undo --list          # recent runs: id · #changes · command
+amdl undo <run-id>        # revert a specific run
+amdl undo --dry-run       # preview what would be reverted
+<any mutating cmd> --no-undo   # don't journal this run
+```
+
+**It never clobbers your later edits.** Before reverting each change, undo checks
+the file still matches what amdl *left*; anything you (or another tool) touched
+since is skipped and reported, not forced. So `undo` is safe even if you've been
+working in the library between the run and the undo.
+
+The journal lives in your OS state dir (`~/.local/state/amdl/undo` on Linux,
+`~/Library/Application Support/amdl/undo` on macOS; override with `$AMDL_UNDO_DIR`)
+and persists across reboots. It's compact — creations store a path+hash, edits
+store just the old tag values (and the old cover only when one is *replaced*) —
+and the last runs are kept, older ones pruned automatically.

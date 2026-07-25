@@ -13,6 +13,7 @@ pub mod dedup;
 pub mod doctor;
 pub mod download;
 pub mod identify;
+pub mod journal;
 pub mod lyrics;
 pub mod recover;
 pub mod retag;

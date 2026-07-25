@@ -83,7 +83,11 @@ fn write_lrc(path: &Path, content: &str) -> bool {
     if let Some(p) = path.parent() {
         let _ = std::fs::create_dir_all(p);
     }
-    std::fs::write(path, content).is_ok()
+    let ok = std::fs::write(path, content).is_ok();
+    if ok {
+        crate::journal::created(path); // undo: delete this new .lrc
+    }
+    ok
 }
 
 /// LRCLIB: try the exact `get` (artist/title/album/duration), then fall back to

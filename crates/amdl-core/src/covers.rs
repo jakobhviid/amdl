@@ -142,7 +142,7 @@ pub fn backfill(output: &Path, opts: &Opts) -> Report {
                 let mut n = 0;
                 if !opts.dry_run {
                     for t in &album.coverless {
-                        if tags::finalize_opus(t, Some(&c)).unwrap_or(false) {
+                        if crate::journal::edit(t, || tags::finalize_opus(t, Some(&c))).unwrap_or(false) {
                             n += 1;
                         }
                     }
@@ -422,7 +422,7 @@ pub fn embed_from_url(tracks: &[PathBuf], url: &str, min_dim: u32) -> anyhow::Re
         .ok_or_else(|| anyhow::anyhow!("no valid image (>={min_dim}px, decodable) at {img_url}"))?;
     let mut n = 0;
     for t in tracks {
-        if tags::set_cover(t, &cover).is_ok() {
+        if crate::journal::edit(t, || tags::set_cover(t, &cover)).is_ok() {
             n += 1;
         }
     }

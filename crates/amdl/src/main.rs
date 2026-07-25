@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, covers, dedup, doctor, download, identify, lyrics, recover, retag, ui, validate};
+use amdl_core::{config, convert, cookies, covers, dedup, doctor, download, identify, journal, lyrics, recover, retag, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -27,6 +27,9 @@ struct Cli {
     /// Verbose: also list per-item detail (every affected file) under the summary.
     #[arg(short, long, global = true)]
     verbose: bool,
+    /// Don't journal this run for `amdl undo` (skips the undo safety net).
+    #[arg(long, global = true)]
+    no_undo: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -210,6 +213,19 @@ enum Cmd {
         /// Print `rm` lines (the redundant copies) to stdout for review — never runs them.
         #[arg(long)]
         print_rm: bool,
+    },
+    /// Revert the last mutating run (or a specific one) — deletes files amdl
+    /// created and restores tags/covers it changed. Skips anything you've edited
+    /// since (never clobbers your changes). `--list` shows recent runs.
+    Undo {
+        /// A specific run id (from `--list`); default: the most recent run.
+        run: Option<String>,
+        /// List recent undoable runs instead of reverting.
+        #[arg(long)]
+        list: bool,
+        /// Preview what would be reverted without changing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Check login cookies: report gamdl's file and auto-detect from your browser.
     Cookies,
@@ -405,6 +421,27 @@ fn llm_guide() -> String {
         out.push('\n');
     }
     out
+}
+
+fn print_undo(r: &journal::UndoReport) {
+    use ui::Tone::{Bad, Good};
+    let Some(run) = &r.run else {
+        ui::info("nothing to undo — no runs recorded");
+        return;
+    };
+    let head = format!("undo · {}", r.command.as_deref().unwrap_or(run));
+    ui::result(
+        &head,
+        r.dry_run,
+        &[ui::tally("reverted", r.reverted, Good), ui::tally("skipped", r.skipped.len(), Bad)],
+        &[],
+    );
+    if ui::is_quiet() {
+        return;
+    }
+    for s in &r.skipped {
+        println!("    skipped: {s}");
+    }
 }
 
 fn print_dedup(r: &dedup::Report) {
@@ -614,7 +651,25 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     ui::set_verbosity(if cli.quiet { 0 } else if cli.verbose { 2 } else { 1 });
     let json = cli.json;
-    match cli.cmd {
+    // Journal mutating runs so `amdl undo` can revert them (unless --no-undo).
+    if is_mutating(&cli.cmd) && !cli.no_undo {
+        journal::begin(std::env::args().collect());
+    }
+    let outcome = dispatch(cli.cmd, json);
+    let _ = journal::commit();
+    outcome
+}
+
+/// Whether a command writes to the library (so it should be journaled for undo).
+fn is_mutating(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::Download { .. } | Cmd::Convert { .. } | Cmd::Covers { .. } | Cmd::Lyrics { .. } | Cmd::Tag { .. } | Cmd::Identify { .. } | Cmd::Recover { .. }
+    )
+}
+
+fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
+    match cmd {
         Cmd::Download { urls, out, cookies, work_dir, keep_work, bitrate, jobs, storefront, fallback, no_convert } => {
             let cfg = config::load();
             let out = out.or(cfg.paths.output).unwrap_or_else(cwd);
@@ -841,6 +896,37 @@ fn main() -> Result<()> {
                 }
             } else {
                 print_dedup(&r);
+            }
+            Ok(())
+        }
+        Cmd::Undo { run, list, dry_run } => {
+            if list {
+                let runs = journal::list();
+                if json {
+                    // minimal JSON without exposing internals
+                    let items: Vec<_> = runs.iter().map(|r| serde_json::json!({"id": r.id, "command": r.command, "changes": r.changes})).collect();
+                    println!("{}", serde_json::to_string_pretty(&items)?);
+                } else if runs.is_empty() {
+                    ui::info("no undoable runs recorded");
+                } else {
+                    ui::info(&format!("{} undoable run(s), newest first:", runs.len()));
+                    for r in &runs {
+                        println!("  {}  · {} change(s)  · {}", r.id, r.changes, r.command);
+                    }
+                }
+                return Ok(());
+            }
+            let rep = journal::undo(run.as_deref(), dry_run)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "run": rep.run, "command": rep.command,
+                        "reverted": rep.reverted, "skipped": rep.skipped, "dry_run": rep.dry_run,
+                    }))?
+                );
+            } else {
+                print_undo(&rep);
             }
             Ok(())
         }

@@ -50,7 +50,7 @@ pub fn run(path: &Path, edit: &Edit, dry_run: bool) -> Report {
         if dry_run {
             changed.fetch_add(1, Ordering::Relaxed);
         } else {
-            match apply(f, edit) {
+            match crate::journal::edit(f, || apply(f, edit)) {
                 Ok(()) => {
                     changed.fetch_add(1, Ordering::Relaxed);
                 }

@@ -65,6 +65,7 @@ pub fn convert_files(
                     if o.skipped {
                         skip.fetch_add(1, Ordering::Relaxed);
                     } else {
+                        crate::journal::created(&out); // undo: delete this new .opus
                         if o.copied {
                             copied.fetch_add(1, Ordering::Relaxed);
                         } else {
@@ -75,6 +76,7 @@ pub fn convert_files(
                         }
                     }
                     if o.lrc {
+                        crate::journal::created(&out.with_extension("lrc"));
                         lrc.fetch_add(1, Ordering::Relaxed);
                     }
                 }

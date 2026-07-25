@@ -82,7 +82,7 @@ pub fn run(path: &Path, key: &str, opts: &Opts) -> Result<Report> {
                         report.skipped_low_score += 1;
                     } else if opts.dry_run {
                         report.applied += 1; // would apply
-                    } else if tags::write_fields(f, m.title.as_deref(), m.artist.as_deref(), m.album.as_deref()).is_ok() {
+                    } else if crate::journal::edit(f, || tags::write_fields(f, m.title.as_deref(), m.artist.as_deref(), m.album.as_deref())).is_ok() {
                         report.applied += 1;
                     }
                 }

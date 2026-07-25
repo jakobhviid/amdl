@@ -99,7 +99,9 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
                 if let Some(p) = out.parent() {
                     let _ = std::fs::create_dir_all(p);
                 }
-                let _ = std::fs::copy(ref_opus, &out);
+                if std::fs::copy(ref_opus, &out).is_ok() {
+                    crate::journal::created(&out); // undo: delete the recovered file
+                }
                 let dir = out.parent().unwrap_or(output);
                 report.regrouped += regroup_to_sibling(std::slice::from_ref(&out), dir, false);
             }
@@ -205,7 +207,7 @@ fn regroup_to_sibling(new_files: &[PathBuf], dir: &Path, dry_run: bool) -> usize
         }
         if dry_run {
             n += 1;
-        } else if tags::set_album_grouping(f, &album, compilation).is_ok() {
+        } else if crate::journal::edit(f, || tags::set_album_grouping(f, &album, compilation)).is_ok() {
             n += 1;
         }
     }
