@@ -147,27 +147,6 @@ damage): `doctor` finds it → delete the bad `.opus` → re-run `convert`
 (skip-existing regenerates only the deleted one). Full recipes in
 **[WORKFLOWS.md](WORKFLOWS.md)**.
 
-## Status
-
-amdl is **feature-complete**. `download`; `convert` (real cover embedding + junk-strip + `.lrc`
-mirroring + skip-existing, `.flac` input, and **copy-verbatim** when the source is
-already Opus); `doctor` health/integrity scan + `--deep` full-decode corruption
-check; **`covers`** — the full funnel (source → cross-library → `--online`
-MusicBrainz/CAA→iTunes→Discogs waterfall → `--paste`/`--paste-file` tail),
-artist+album-gated, validated + square-cropped; `lyrics` (LRCLIB, state-only);
-`tag` (compilation grouping + setters); **`identify`** (AcoustID fingerprint,
-score-gated `--apply` + `--dry-run`); **`recover`** (cross-library copy + gamdl
-re-acquire, title+duration-verified, with sibling regrouping); **`dedup`**
-(duplicate/orphan surfacing, never deletes); **`undo`** (revert the last run —
-journaled by default, never clobbers your later edits); `--json` everywhere and
-**`--llm`** (full agent guide); the `amdl-core` library crate; and lazy config
-(paths, Opus quality, API keys). Parallel throughout, animated progress bars,
-severity-colored summaries with next-step hints.
-
-Delivery/serving is intentionally out of scope — that's your media server's job
-(Navidrome, say, auto-scans its library), and amdl stays a self-contained *file*
-harness. See [WORKFLOWS.md](WORKFLOWS.md) for end-to-end recipes.
-
 ## AI disclosure
 
 Parts of this codebase were written with the assistance of AI coding agents
