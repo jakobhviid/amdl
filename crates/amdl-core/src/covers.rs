@@ -84,26 +84,32 @@ pub fn backfill(output: &Path, opts: &Opts) -> Report {
         return report;
     }
 
-    // Group coverless tracks by normalized album (reading every opus's cover
-    // state — worth a bar on a large library).
+    // Group coverless tracks by normalized album. The per-file cover/tag reads
+    // (lofty) are the cost on a large library, and independent, so run them in
+    // parallel; the grouping itself is cheap and stays serial.
     let scan = ui::bar(opus.len() as u64, "Scanning");
+    let coverless: Vec<(String, String, String, PathBuf)> = opus
+        .par_iter()
+        .filter_map(|o| {
+            scan.inc(1);
+            if tags::has_cover(o) {
+                return None;
+            }
+            let b = tags::read_basic(o);
+            let display = b.album.clone().unwrap_or_else(|| "(unknown album)".into());
+            let artist = b.album_artist.or(b.artist).unwrap_or_else(|| "(unknown)".into());
+            Some((norm_album(&display), display, artist, o.clone()))
+        })
+        .collect();
+    scan.finish_and_clear();
     let mut albums: HashMap<String, Album> = HashMap::new();
-    for o in &opus {
-        scan.inc(1);
-        if tags::has_cover(o) {
-            continue;
-        }
-        let b = tags::read_basic(o);
-        let display = b.album.clone().unwrap_or_else(|| "(unknown album)".into());
-        let artist = b.album_artist.or(b.artist).unwrap_or_else(|| "(unknown)".into());
-        let key = norm_album(&display);
+    for (key, display, artist, o) in coverless {
         albums
             .entry(key)
             .or_insert_with(|| Album { display, artist, coverless: Vec::new() })
             .coverless
-            .push(o.clone());
+            .push(o);
     }
-    scan.finish_and_clear();
     report.coverless_albums = albums.len();
     if albums.is_empty() {
         return report;

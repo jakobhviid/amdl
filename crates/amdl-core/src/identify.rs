@@ -9,9 +9,40 @@
 //!     key, which is rejected as "invalid API key").
 use crate::{tags, ui};
 use anyhow::{bail, Result};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// AcoustID allows at most ~3 requests/second per application key; exceeding it
+/// earns 429s and can get the key banned. `fpcalc` fingerprinting is local CPU
+/// work and safe to parallelize, so we fan that out across cores but funnel every
+/// lookup through this global gate to hold the network side at the rate limit.
+const ACOUSTID_MIN_INTERVAL: Duration = Duration::from_millis(350);
+
+struct RateGate {
+    last: Mutex<Option<Instant>>,
+    min: Duration,
+}
+impl RateGate {
+    fn new(min: Duration) -> Self {
+        Self { last: Mutex::new(None), min }
+    }
+    /// Block until at least `min` has elapsed since the previous caller. Holding
+    /// the lock across the sleep serializes callers at exactly the min interval.
+    fn wait(&self) {
+        let mut last = self.last.lock().unwrap();
+        if let Some(prev) = *last {
+            let elapsed = prev.elapsed();
+            if elapsed < self.min {
+                std::thread::sleep(self.min - elapsed);
+            }
+        }
+        *last = Some(Instant::now());
+    }
+}
 
 const UA: &str = concat!("amdl/", env!("CARGO_PKG_VERSION"), " (https://github.com/jakobhviid/amdl)");
 
@@ -60,44 +91,89 @@ pub struct Report {
     pub results: Vec<FileResult>,
 }
 
+/// Per-file outcome, collected in input order then aggregated into the Report.
+enum Outcome {
+    SkippedTagged,
+    Matched { m: Match, applied: bool, low_score: bool },
+    NoMatch,
+    Failed,
+}
+
 pub fn run(path: &Path, key: &str, opts: &Opts) -> Result<Report> {
     if which("fpcalc").is_none() {
         bail!("fpcalc not found — `brew install chromaprint`");
     }
     let files = list_audio(path);
-    let mut report = Report { total: files.len(), dry_run: opts.dry_run, ..Default::default() };
     let pb = ui::bar(files.len() as u64, "Identifying");
-    for f in &files {
-        let rel = f.strip_prefix(path).unwrap_or(f).display().to_string();
-        if opts.skip_tagged && has_all_tags(f) {
-            report.skipped_tagged += 1;
-            pb.inc(1);
-            continue;
-        }
-        match identify_one(f, key) {
-            Ok(Some(m)) => {
+    let gate = RateGate::new(ACOUSTID_MIN_INTERVAL);
+    let jobs = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(jobs.max(1)).build()?;
+
+    // Fingerprint in parallel (local CPU work); every AcoustID lookup passes
+    // through `gate`, so the network side stays under the rate limit even though
+    // fpcalc is fanned out across cores. `map` preserves input order.
+    let outcomes: Vec<(String, Outcome)> = pool.install(|| {
+        files
+            .par_iter()
+            .map(|f| {
+                let rel = f.strip_prefix(path).unwrap_or(f).display().to_string();
+                let out = classify(f, key, opts, &gate);
+                pb.inc(1);
+                (rel, out)
+            })
+            .collect()
+    });
+    pb.finish_and_clear();
+
+    let mut report = Report { total: files.len(), dry_run: opts.dry_run, ..Default::default() };
+    for (rel, out) in outcomes {
+        match out {
+            Outcome::SkippedTagged => report.skipped_tagged += 1,
+            Outcome::Matched { m, applied, low_score } => {
                 report.matched += 1;
-                if opts.apply {
-                    if m.score < opts.min_score {
-                        report.skipped_low_score += 1;
-                    } else if opts.dry_run {
-                        report.applied += 1; // would apply
-                    } else if crate::journal::edit(f, || tags::write_fields(f, m.title.as_deref(), m.artist.as_deref(), m.album.as_deref())).is_ok() {
-                        report.applied += 1;
-                    }
+                if applied {
+                    report.applied += 1;
+                }
+                if low_score {
+                    report.skipped_low_score += 1;
                 }
                 report.results.push(FileResult { file: rel, matched: Some(m) });
             }
-            Ok(None) => {
+            Outcome::NoMatch => {
                 report.no_match += 1;
                 report.results.push(FileResult { file: rel, matched: None });
             }
-            Err(_) => report.failed += 1,
+            Outcome::Failed => report.failed += 1,
         }
-        pb.inc(1);
     }
-    pb.finish_and_clear();
     Ok(report)
+}
+
+fn classify(f: &Path, key: &str, opts: &Opts, gate: &RateGate) -> Outcome {
+    if opts.skip_tagged && has_all_tags(f) {
+        return Outcome::SkippedTagged;
+    }
+    let Ok((duration, fp)) = fingerprint(f) else {
+        return Outcome::Failed;
+    };
+    gate.wait();
+    match lookup(key, duration, &fp) {
+        Ok(Some(m)) => {
+            let (mut applied, mut low_score) = (false, false);
+            if opts.apply {
+                if m.score < opts.min_score {
+                    low_score = true;
+                } else if opts.dry_run {
+                    applied = true; // would apply
+                } else if crate::journal::edit(f, || tags::write_fields(f, m.title.as_deref(), m.artist.as_deref(), m.album.as_deref())).is_ok() {
+                    applied = true;
+                }
+            }
+            Outcome::Matched { m, applied, low_score }
+        }
+        Ok(None) => Outcome::NoMatch,
+        Err(_) => Outcome::Failed,
+    }
 }
 
 fn has_all_tags(path: &Path) -> bool {
@@ -106,10 +182,6 @@ fn has_all_tags(path: &Path) -> bool {
     ok(&b.artist) && ok(&b.title) && ok(&b.album)
 }
 
-fn identify_one(path: &Path, key: &str) -> Result<Option<Match>> {
-    let (duration, fp) = fingerprint(path)?;
-    lookup(key, duration, &fp)
-}
 
 fn fingerprint(path: &Path) -> Result<(u64, String)> {
     let out = Command::new("fpcalc").arg("-json").arg(path).output()?;
