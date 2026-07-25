@@ -239,6 +239,69 @@ whose tracks are a strict subset of another edition of the same release, e.g.
 Standard ⊂ Deluxe; multi-disc sets are safe — their discs are disjoint). The
 subset tier is heuristic and labelled as such; review before removing anything.
 
+## Semantics — matching, exit codes, concurrency (read before scripting)
+
+The behavior below is stable and worth knowing up front, so an agent can predict
+results instead of discovering them by trial. It is the contract the `--json`
+loop relies on.
+
+### How tracks are matched (normalization)
+
+Grouping and de-duplication never compare raw strings — they compare *normalized*
+keys, and the rules are deliberately blunt so trivially-different spellings
+collapse together:
+
+- **Album key** strips everything inside `(...)`/`[...]` (edition/disc suffixes),
+  then keeps only the remaining **alphanumeric** characters, lowercased. So
+  `"Album (Deluxe Edition)"`, `"Album [Disc 2]"`, and `"album"` all key to
+  `album` — which is exactly why multi-disc sets and Standard/Deluxe editions
+  group as one release.
+- **Artist / title key** keeps all **alphanumeric** characters, lowercased, with
+  **no** bracket-stripping — so a `(feat. …)` in a *title* is significant
+  (`"Song (feat. X)"` ≠ `"Song"`), while the same suffix in an *album* is not.
+- Both keys are **Unicode-aware**: letters are lowercased, not ASCII-folded, so
+  accents are preserved (`"Beyoncé"` → `beyoncé`). Two spellings that differ only
+  by an accent are treated as different — normalize upstream if you need them to
+  merge.
+- Command identities built from these: **covers** groups coverless tracks by the
+  album key; **dedup** exact-duplicate identity is `(artist, album, title)` keys;
+  **recover** matches a broken track on `(album, title)` keys **plus** a duration
+  check (below).
+
+### Confidence gates (a wrong write is worse than no write)
+
+- **recover** accepts a re-acquired/cross-library candidate only if the title
+  keys match **and** durations agree within **±3 s**; with no known source
+  duration it falls back to an **exact** normalized-title match. Live cuts,
+  remixes, and wrong versions are rejected to `still_broken` rather than
+  substituted.
+- **identify** never auto-applies (`--apply`) a match below `--min-score`
+  (default **0.9**); those are counted as `skipped_low_score` and left untouched.
+- **covers** online matches are gated on artist+album agreeing; a blank cover is
+  left rather than embedding a wrong one.
+
+### Exit codes — parse `--json`, don't gate on `$?`
+
+A command exits **non-zero only on a fatal error** (missing path, no source dir,
+unreadable config). **Per-item problems never change the exit code**: a `doctor`
+that finds 500 truncated files, a `convert` with `failed: 12`, or an `identify`
+with zero matches all still exit `0`. So drive decisions off the `--json` counts,
+never off the process exit status. `--json` output is a direct serialization of
+the internal report structs, so the field set is exact and stable — read a
+command's `--help`/source for the full shape rather than inferring it.
+
+### Concurrency — what is actually safe to run in parallel
+
+amdl takes **no file locks**. Parallelism is safe only when jobs touch *different
+files*:
+
+- `convert` (writes `.opus`) and `lyrics` (writes `.lrc`) over the same library
+  are safe — disjoint file types (W1).
+- Two commands that write the **same** output files (e.g. two `convert`s, or
+  `convert` and `covers`, into one library) are **not** guarded — serialize them.
+- Read-only commands (`doctor`, `dedup`, report-only `identify`, any `--dry-run`)
+  are always safe to run concurrently with anything.
+
 ## Scope — acquisition vs. the harness
 
 amdl's job starts *after* the files exist. Acquisition (codecs, DRM, storefronts,
