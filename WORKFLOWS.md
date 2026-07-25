@@ -181,8 +181,43 @@ amdl recover /music/lib --source /music/originals --online
 amdl recover /music/lib --source /music/originals --dry-run --json    # preview
 ```
 
-Metadata comes from the file's tags, else the folder + filename. (Deleting a
-damaged *derived* `.opus` and re-running `convert` is the other repair path — W3.)
+Metadata comes from the file's tags, else the folder + filename. A re-acquired
+track carries Apple's *own* album tag, which often differs from the
+compilation/folder it belongs to — so after placing it, `recover` reads an
+existing album sibling and **regroups** it (matches `album`, and
+`albumartist=Various Artists`+`compilation=1` if the sibling is a compilation),
+so it joins the album instead of splitting into a lone one-track album. Honors
+`--dry-run`. (Deleting a damaged *derived* `.opus` and re-running `convert` is the
+other repair path — W3.)
+
+## W7 — Surface duplicates / orphan editions (`dedup`)
+
+Find redundant tracks so you can prune them. `dedup` **never deletes** — it
+reports, because removing media is your call. Detection is tag-level (a folder can
+mix correctly- and mis-tagged tracks), with a cross-release guard: a song that
+appears on both a studio album *and* a compilation has two different albums, so
+it's **not** flagged — that membership is wanted.
+
+```sh
+amdl dedup /music/lib                 # exact-duplicate recordings + subset editions
+amdl dedup /music/lib --json | jq '.subset_editions'
+amdl dedup /music/lib --print-rm      # emit `rm` lines (redundant copies) to review, then run yourself
+```
+
+Two findings: **exact duplicates** (same artist + normalized album + title — keeps
+the copy in the most-complete edition) and **subset editions** (a raw edition
+whose tracks are a strict subset of another edition of the same release, e.g.
+Standard ⊂ Deluxe; multi-disc sets are safe — their discs are disjoint). The
+subset tier is heuristic and labelled as such; review before removing anything.
+
+## Scope — acquisition vs. the harness
+
+amdl's job starts *after* the files exist. Acquisition (codecs, DRM, storefronts,
+login, download failures) is **gamdl's** domain — take those to the gamdl team.
+Likewise, *serving* the finished library is your media server's job: point
+Navidrome (or whatever) at the **output** Opus tree (never the read-only source)
+and let it scan — amdl deliberately stays a self-contained file harness and does
+not reach across the network into a server it doesn't own.
 
 ## Undo — planned
 

@@ -1,13 +1,16 @@
 //! covers — backfill missing Opus cover art (spec §3), as an ordered funnel from
-//! cheapest+safest to riskiest. Implemented here (offline, always-correct passes):
+//! cheapest+safest to riskiest:
 //!   1. copy-from-source — the source file still has embedded art convert didn't need.
 //!   2. cross-library copy — a `--reference` library already has the *same album*
 //!      covered; copy it (free, guaranteed-correct).
-//! Anything still uncovered becomes a **numbered straggler list** (album, artist,
-//! track count, impact-sorted) for a human/agent to resolve. Covers are applied
-//! per *album* (normalized title, so multi-disc sets and editions group), and
-//! every embedded image is validated (decodes, min edge) and square-cropped.
-//! Network sources (MusicBrainz/CAA/iTunes/Discogs) are planned (see WORKFLOWS).
+//!   3. online waterfall (`--online`) — MusicBrainz/CAA → iTunes → Discogs, gated
+//!      on artist+album agreeing (a blank cover beats a wrong one).
+//!   4. paste-a-URL tail (`--paste`) — whatever's still uncovered is a numbered,
+//!      most-tracks-first straggler list; the operator pastes one image/Spotify URL
+//!      per album and it's embedded across every track of that album.
+//! Covers are applied per *album* (normalized title, so multi-disc sets and
+//! editions group), and every embedded image is validated (decodes, min edge)
+//! and square-cropped.
 //!
 //! Safety: only ever embeds into a *coverless* track, validates bytes before
 //! writing, and never touches the source. A blank cover beats a wrong one.

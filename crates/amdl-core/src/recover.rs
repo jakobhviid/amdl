@@ -11,7 +11,7 @@
 use crate::{convert, download, tags, ui};
 use anyhow::Result;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub struct Opts {
@@ -31,6 +31,9 @@ pub struct Report {
     pub broken: usize,
     pub recovered_from_sibling: usize,
     pub reacquired: usize,
+    /// Recovered files whose album tag was matched to an existing sibling so they
+    /// group with the album instead of splitting out under Apple's own album tag.
+    pub regrouped: usize,
     pub dry_run: bool,
     pub still_broken: Vec<String>,
 }
@@ -97,6 +100,8 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
                     let _ = std::fs::create_dir_all(p);
                 }
                 let _ = std::fs::copy(ref_opus, &out);
+                let dir = out.parent().unwrap_or(output);
+                report.regrouped += regroup_to_sibling(std::slice::from_ref(&out), dir, false);
             }
             report.recovered_from_sibling += 1;
             pb.inc(1);
@@ -106,8 +111,10 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
         // 2. re-acquire via Apple Music (needs --online + cookies)
         if opts.online && !opts.dry_run {
             if let Some(artist) = artist.as_deref() {
-                if reacquire(&artist_title(artist, &title), src, output, opts).unwrap_or(false) {
+                let dir = out.parent().unwrap_or(output).to_path_buf();
+                if let Ok(Some(new_files)) = reacquire(&artist_title(artist, &title), src, output, opts) {
                     report.reacquired += 1;
+                    report.regrouped += regroup_to_sibling(&new_files, &dir, false);
                     pb.inc(1);
                     continue;
                 }
@@ -132,10 +139,12 @@ fn artist_title(artist: &str, title: &str) -> String {
 }
 
 /// Resolve `term` to an Apple Music song URL (iTunes search), download via gamdl,
-/// convert to Opus into `output` at the same relative path as `src`.
-fn reacquire(term: &str, src: &Path, output: &Path, opts: &Opts) -> Result<bool> {
+/// convert to Opus into `output` at the same relative path as `src`. Returns the
+/// newly-written Opus paths on success (so the caller can regroup them), or `None`
+/// if the track couldn't be resolved/fetched.
+fn reacquire(term: &str, src: &Path, output: &Path, opts: &Opts) -> Result<Option<Vec<PathBuf>>> {
     let Some(url) = itunes_song_url(term) else {
-        return Ok(false);
+        return Ok(None);
     };
     let cookies = crate::cookies::resolve(opts.cookies.clone(), false)?;
     std::fs::create_dir_all(&opts.work_dir)?;
@@ -147,7 +156,7 @@ fn reacquire(term: &str, src: &Path, output: &Path, opts: &Opts) -> Result<bool>
     };
     let fetched = download::download(&url, &dl)?;
     if fetched.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     // Convert into the output at the ORIGINAL relative path (group with siblings).
     let rel_dir = src
@@ -156,8 +165,59 @@ fn reacquire(term: &str, src: &Path, output: &Path, opts: &Opts) -> Result<bool>
         .and_then(|r| r.parent())
         .map(|p| output.join(p))
         .unwrap_or_else(|| output.to_path_buf());
+    // Snapshot the album dir so we can identify the freshly-written Opus (gamdl
+    // names the file itself, so we can't predict the path).
+    let before: HashSet<PathBuf> = list_audio(&rel_dir, &["opus"]).into_iter().collect();
     let _ = convert::convert_files(&fetched, &opts.work_dir, &rel_dir, &opts.bitrate, opts.jobs)?;
-    Ok(true)
+    let new_files: Vec<PathBuf> =
+        list_audio(&rel_dir, &["opus"]).into_iter().filter(|p| !before.contains(p)).collect();
+    Ok(Some(new_files))
+}
+
+/// Match each just-recovered Opus in `dir` to an existing album sibling's `album`
+/// (and compilation flag), so it groups with the album instead of splitting out
+/// under Apple's own album tag. `new_files` are excluded from sibling selection.
+/// Uses `read_dir` (never a glob — album folders contain brackets like `[Disc 2]`,
+/// which a glob would treat as a character class). Returns how many were changed.
+fn regroup_to_sibling(new_files: &[PathBuf], dir: &Path, dry_run: bool) -> usize {
+    let sibling = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("opus"))
+        .filter(|p| !new_files.iter().any(|n| n == p))
+        .find_map(|p| {
+            let b = tags::read_basic(&p);
+            grouping_from_sibling(b.album.as_deref(), b.album_artist.as_deref())
+        });
+    let Some((album, compilation)) = sibling else {
+        return 0;
+    };
+    let mut n = 0;
+    for f in new_files {
+        // skip if it already matches the album (idempotent).
+        if tags::read_basic(f).album.as_deref() == Some(album.as_str()) {
+            continue;
+        }
+        if dry_run {
+            n += 1;
+        } else if tags::set_album_grouping(f, &album, compilation).is_ok() {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// The album grouping to stamp on a recovered file, given a sibling's tags: its
+/// `album`, and whether the album is a compilation (inferred from the sibling's
+/// album-artist being "Various Artists"). `None` if the sibling has no album.
+fn grouping_from_sibling(sibling_album: Option<&str>, sibling_album_artist: Option<&str>) -> Option<(String, bool)> {
+    let album = sibling_album?;
+    if album.is_empty() {
+        return None;
+    }
+    Some((album.to_string(), sibling_album_artist == Some("Various Artists")))
 }
 
 fn itunes_song_url(term: &str) -> Option<String> {
@@ -207,5 +267,27 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
                 out.push(p);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grouping_from_sibling;
+
+    #[test]
+    fn sibling_grouping_infers_compilation_from_album_artist() {
+        // a compilation sibling → match its album and flag it a compilation
+        assert_eq!(
+            grouping_from_sibling(Some("Eurovision [Disc 2]"), Some("Various Artists")),
+            Some(("Eurovision [Disc 2]".to_string(), true))
+        );
+        // an ordinary album sibling → match album, not a compilation
+        assert_eq!(
+            grouping_from_sibling(Some("Some Album"), Some("Some Artist")),
+            Some(("Some Album".to_string(), false))
+        );
+        // no sibling album → nothing to match; leave the recovered tags as-is
+        assert_eq!(grouping_from_sibling(None, Some("Various Artists")), None);
+        assert_eq!(grouping_from_sibling(Some(""), None), None);
     }
 }

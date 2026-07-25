@@ -9,6 +9,7 @@ pub mod config;
 pub mod convert;
 pub mod cookies;
 pub mod covers;
+pub mod dedup;
 pub mod doctor;
 pub mod download;
 pub mod identify;

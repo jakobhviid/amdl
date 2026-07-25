@@ -8,7 +8,7 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::picture::{Picture, PictureType};
 use lofty::prelude::{Accessor, ItemKey};
 use lofty::probe::Probe;
-use lofty::tag::{Tag, TagType};
+use lofty::tag::{ItemValue, Tag, TagItem, TagType};
 use std::path::Path;
 
 /// Minimal, player-relevant tag view used by scan/covers/tag ops.
@@ -157,6 +157,30 @@ pub fn write_fields(path: &Path, title: Option<&str>, artist: Option<&str>, albu
     }
     if let Some(al) = album {
         tag.set_album(al.to_string());
+    }
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("save tags to {}", path.display()))?;
+    Ok(())
+}
+
+/// Group a track with its album siblings: set `album`, and — if the album is a
+/// compilation — `albumartist=Various Artists` + `compilation=1`. Used by
+/// `recover`: a re-acquired track carries Apple's *own* album tag, which often
+/// differs from the compilation/folder it belongs to, so without this it splits
+/// into a lone one-track album in a tag-grouping player.
+pub fn set_album_grouping(path: &Path, album: &str, compilation: bool) -> Result<()> {
+    let mut tagged = Probe::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read()?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::VorbisComments));
+    }
+    let tag = tagged.primary_tag_mut().expect("tag present");
+    tag.set_album(album.to_string());
+    if compilation {
+        tag.insert(TagItem::new(ItemKey::AlbumArtist, ItemValue::Text("Various Artists".into())));
+        tag.insert(TagItem::new(ItemKey::FlagCompilation, ItemValue::Text("1".into())));
     }
     tagged
         .save_to_path(path, WriteOptions::default())

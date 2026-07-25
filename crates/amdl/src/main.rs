@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, covers, doctor, download, identify, lyrics, recover, retag, ui, validate};
+use amdl_core::{config, convert, cookies, covers, dedup, doctor, download, identify, lyrics, recover, retag, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -165,6 +165,16 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Surface duplicate/orphan tracks (never deletes): exact-duplicate recordings
+    /// and subset editions (e.g. Standard ⊂ Deluxe), with the paths to remove and
+    /// which copy to keep. `--print-rm` emits `rm` lines to stdout for you to review.
+    Dedup {
+        /// Output/derived library to scan (default: config [paths] output).
+        output: Option<PathBuf>,
+        /// Print `rm` lines (the redundant copies) to stdout for review — never runs them.
+        #[arg(long)]
+        print_rm: bool,
+    },
     /// Check login cookies: report gamdl's file and auto-detect from your browser.
     Cookies,
     /// Print a shell completion script (bash|zsh|fish|…) to stdout.
@@ -289,8 +299,9 @@ fn print_covers(r: &covers::Report) {
 
 fn print_recover(r: &recover::Report) {
     ui::info(&format!(
-        "broken {} · recovered-from-sibling {} · re-acquired {}{}",
-        r.broken, r.recovered_from_sibling, r.reacquired, if r.dry_run { " [dry-run]" } else { "" }
+        "broken {} · recovered-from-sibling {} · re-acquired {} · regrouped {}{}",
+        r.broken, r.recovered_from_sibling, r.reacquired, r.regrouped,
+        if r.dry_run { " [dry-run]" } else { "" }
     ));
     if !r.still_broken.is_empty() {
         ui::warn(&format!("{} still broken (no sibling; run with --online to re-acquire):", r.still_broken.len()));
@@ -303,6 +314,49 @@ fn print_recover(r: &recover::Report) {
     } else if r.broken > 0 {
         ui::ok("all recovered");
     }
+}
+
+fn print_dedup(r: &dedup::Report) {
+    ui::info(&format!(
+        "scanned {} · exact-duplicate groups {} · subset editions {}",
+        r.total, r.exact_duplicates.len(), r.subset_editions.len()
+    ));
+    if r.is_clean() {
+        ui::ok("no duplicates or orphan editions found");
+        return;
+    }
+    if !r.exact_duplicates.is_empty() {
+        ui::warn("exact-duplicate recordings (keep one, the rest are redundant):");
+        for d in r.exact_duplicates.iter().take(30) {
+            let note = if d.durations_diverge { "  [durations differ — may be distinct versions]" } else { "" };
+            println!("  {} — {} · {}{}", d.artist, d.title, d.album, note);
+            println!("    keep:   {}", d.keep);
+            for rm in &d.remove {
+                println!("    remove: {rm}");
+            }
+        }
+        if r.exact_duplicates.len() > 30 {
+            println!("    … and {} more groups", r.exact_duplicates.len() - 30);
+        }
+    }
+    if !r.subset_editions.is_empty() {
+        ui::warn("subset editions — one edition wholly contained in another (heuristic):");
+        for s in r.subset_editions.iter().take(30) {
+            println!("  {} — {} ({} tracks) ⊂ {}", s.artist, s.album, s.tracks, s.covered_by);
+            for rm in &s.remove {
+                println!("    remove: {rm}");
+            }
+        }
+        if r.subset_editions.len() > 30 {
+            println!("    … and {} more", r.subset_editions.len() - 30);
+        }
+    }
+    ui::info("nothing was deleted — review, then remove yourself (or `amdl dedup --print-rm`).");
+}
+
+/// Single-quote a path for a POSIX shell (for `--print-rm` output).
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn print_identify(r: &identify::Report) {
@@ -566,6 +620,23 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
                 print_recover(&r);
+            }
+            Ok(())
+        }
+        Cmd::Dedup { output, print_rm } => {
+            let cfg = config::load();
+            let output = output
+                .or(cfg.paths.output.clone())
+                .context("no output dir — pass one or set [paths] output")?;
+            let r = dedup::run(&output);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else if print_rm {
+                for path in r.removals() {
+                    println!("rm -- {}", shell_quote(path));
+                }
+            } else {
+                print_dedup(&r);
             }
             Ok(())
         }

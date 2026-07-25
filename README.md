@@ -16,9 +16,13 @@ the **output** directory. See **[WORKFLOWS.md](WORKFLOWS.md)** for end-to-end
 recipes (build a library, health-scan, repair truncation).
 
 > **Acquisition is [gamdl](https://github.com/glomatico/gamdl)'s job, not amdl's.**
-> amdl orchestrates gamdl and processes whatever it produces into a tidy library.
-> Install and use gamdl per its own documentation, terms, and your local laws —
-> that part is at your own risk. amdl supplies only the library-management harness.
+> amdl only *thin-wraps* a slice of gamdl (kick off a fetch, then process what it
+> produces) so `download`/`recover` are one command. Anything about the
+> acquisition itself — codecs, DRM, storefronts, login quirks, download failures —
+> is **gamdl's domain: take those requests and bugs to the gamdl team, not here.**
+> amdl's own surface is everything *after* the files exist: validate, transcode,
+> tag, cover, de-dup, repair. Install and use gamdl per its own documentation,
+> terms, and your local laws — that part is at your own risk.
 
 ## Install
 
@@ -102,10 +106,11 @@ amdl <command> [options]
 | `tag <path>` | Set tags across a file/folder — `--compilation` groups a Various-Artists album (`albumartist=Various Artists` + `compilation=1`); also `--album/--artist/--album-artist`. `--dry-run`. |
 | `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |
 | `identify <path>` | Fix untagged/mis-tagged tracks by **sound** (AcoustID fingerprint via `fpcalc`); `--apply` writes artist/title/album. Needs `[keys] acoustid`. |
-| `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl. `--dry-run`. |
+| `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl. Recovered tracks are **regrouped** to their album siblings (so they don't split out under Apple's own album tag). `--dry-run`. |
+| `dedup [output]` | **Surface** (never delete) redundant tracks: exact-duplicate recordings + subset editions (Standard ⊂ Deluxe), with paths to remove and which copy to keep. `--print-rm` emits `rm` lines for you to review. |
 | `cookies` | Report which login cookies amdl would use, no download. |
 
-`--json` (global) makes `convert`/`doctor`/`config` emit machine-readable output
+`--json` (global) makes every batch command emit a machine-readable report
 for scripting. Common flags: `--bitrate 192k`, `-j/--jobs`, `-o/--out`,
 `--cookies`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,
 `--no-convert`. Also `--version`, `--help`, shell completions, and a man page per
@@ -134,11 +139,14 @@ Opus); `doctor` health/integrity scan; **`covers`** — the full funnel
 `--paste` human tail), artist+album-gated, validated + square-cropped;
 `lyrics` (LRCLIB, state-only); `tag` (compilation grouping + setters);
 **`identify`** (AcoustID fingerprint); **`recover`** (cross-library copy + gamdl
-re-acquire); `--json` everywhere; the `amdl-core` library crate; and lazy config
-(paths, Opus quality, API keys). Parallel throughout, animated progress bars.
+re-acquire, with sibling regrouping); **`dedup`** (duplicate/orphan surfacing,
+never deletes); `--json` everywhere; the `amdl-core` library crate; and lazy
+config (paths, Opus quality, API keys). Parallel throughout, animated progress bars.
 
-**Planned:** advanced `tag` ops (untagged recovery from siblings, duplicate/orphan
-detection), a first-class `undo`, and Navidrome delivery. See [WORKFLOWS.md](WORKFLOWS.md).
+**Planned:** a first-class `undo` (revert the last run's writes). Delivery/serving
+is intentionally out of scope — that's your media server's job (Navidrome, say,
+auto-scans its library), and amdl stays a self-contained *file* harness.
+See [WORKFLOWS.md](WORKFLOWS.md).
 
 ## License
 
