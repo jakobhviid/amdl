@@ -152,16 +152,39 @@ amdl covers /music/lib --source /music/originals --online --paste
 #   cover>                                           ← blank line to finish
 ```
 
-## recovery, identification — planned
+## W5 — Fix untagged / mis-tagged tracks (`identify`)
 
-On the roadmap (ported from the original Python tool, adapted to source→output).
-**Not yet implemented**; use the Python tool + scripts for these:
+Identify a track by **sound** (AcoustID fingerprint via `fpcalc`) — the only key
+that works when tags are empty or wrong. Needs an AcoustID **application** key
+(`[keys] acoustid` in config, or `$ACOUSTID_KEY`; create one at
+<https://acoustid.org/new-application> — it is NOT your account/user key).
 
-- **`recover`** — detect broken/unconverted → resolve metadata (tags, else
-  folder/sibling) → cross-library copy if a reference has it, else re-acquire via
-  gamdl → place in output, retagged to group with its album siblings.
-- **`identify`** — AcoustID acoustic fingerprint (`fpcalc`) to fix untagged /
-  mis-tagged tracks by sound.
+```sh
+amdl identify /music/lib                 # report: artist — title · album (score)
+amdl identify /music/lib --apply         # write the resolved artist/title/album
+amdl identify /music/lib --json | jq '.results[] | select(.matched)'
+```
 
-When implemented, each will be idempotent, resumable, `--json`, and logged for
-`undo`. Watch this file and `amdl <command> --help`.
+Then hand the now-tagged album to `covers` for its art.
+
+## W6 — Recover broken / missing tracks (`recover`)
+
+A source file that never produced an Opus (conversion failure / damaged
+original) is found by comparing source → output. Recover it cheaply first, then
+fall back to re-download:
+
+```sh
+# cross-library copy: a sibling library already has the track (free, no download)
+amdl recover /music/lib --source /music/originals --reference /music/otherlib
+# re-acquire whatever no sibling has, via gamdl (needs cookies)
+amdl recover /music/lib --source /music/originals --online
+amdl recover /music/lib --source /music/originals --dry-run --json    # preview
+```
+
+Metadata comes from the file's tags, else the folder + filename. (Deleting a
+damaged *derived* `.opus` and re-running `convert` is the other repair path — W3.)
+
+## Undo — planned
+
+Every mutating command is idempotent and safe to re-run; a first-class `undo`
+(revert the last run's writes) is still on the roadmap.

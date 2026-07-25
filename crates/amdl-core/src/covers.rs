@@ -81,9 +81,12 @@ pub fn backfill(output: &Path, opts: &Opts) -> Report {
         return report;
     }
 
-    // Group coverless tracks by normalized album.
+    // Group coverless tracks by normalized album (reading every opus's cover
+    // state — worth a bar on a large library).
+    let scan = ui::bar(opus.len() as u64, "Scanning");
     let mut albums: HashMap<String, Album> = HashMap::new();
     for o in &opus {
+        scan.inc(1);
         if tags::has_cover(o) {
             continue;
         }
@@ -97,6 +100,7 @@ pub fn backfill(output: &Path, opts: &Opts) -> Report {
             .coverless
             .push(o.clone());
     }
+    scan.finish_and_clear();
     report.coverless_albums = albums.len();
     if albums.is_empty() {
         return report;

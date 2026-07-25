@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, covers, doctor, download, lyrics, retag, ui, validate};
+use amdl_core::{config, convert, cookies, covers, doctor, download, identify, lyrics, recover, retag, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -105,6 +105,15 @@ enum Cmd {
         #[arg(short, long, default_value_t = 8)]
         jobs: usize,
     },
+    /// Identify tracks by sound (AcoustID fingerprint) to fix untagged/mis-tagged
+    /// files. Needs [keys] acoustid (or $ACOUSTID_KEY). --apply writes the match.
+    Identify {
+        /// File or directory to identify.
+        path: PathBuf,
+        /// Write the resolved artist/title/album (default: report only).
+        #[arg(long)]
+        apply: bool,
+    },
     /// Set tags across a file/folder. `--compilation` groups a Various-Artists
     /// album (albumartist=Various Artists + compilation=1); also set album/artist.
     Tag {
@@ -131,8 +140,31 @@ enum Cmd {
         #[arg(long)]
         init: bool,
     },
-    /// (planned) Re-acquire broken/missing files from Apple Music by their metadata.
-    Recover { dir: PathBuf },
+    /// Re-acquire broken/missing tracks (source files that never produced an
+    /// Opus): cross-library copy from --reference, else re-acquire via gamdl
+    /// (--online). Metadata from tags, else folder+filename.
+    Recover {
+        /// Output/derived library (default: config [paths] output).
+        output: Option<PathBuf>,
+        /// Source tree to detect missing/broken against (default: config [paths] source).
+        #[arg(short, long)]
+        source: Option<PathBuf>,
+        /// Reference libraries to copy matching tracks from (free, no download).
+        #[arg(short, long)]
+        reference: Vec<PathBuf>,
+        /// Re-acquire tracks no reference has, via gamdl (needs cookies).
+        #[arg(long)]
+        online: bool,
+        /// Cookies for re-acquisition (or $AMDL_COOKIES_FILE).
+        #[arg(long, env = "AMDL_COOKIES_FILE")]
+        cookies: Option<PathBuf>,
+        /// Opus bitrate for re-acquired tracks (default: config, else 192k).
+        #[arg(long)]
+        bitrate: Option<String>,
+        /// Report what would be recovered without writing/downloading.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Check login cookies: report gamdl's file and auto-detect from your browser.
     Cookies,
     /// Print a shell completion script (bash|zsh|fish|…) to stdout.
@@ -252,6 +284,43 @@ fn print_covers(r: &covers::Report) {
         }
     } else if r.coverless_albums > 0 {
         ui::ok("all coverless albums resolved");
+    }
+}
+
+fn print_recover(r: &recover::Report) {
+    ui::info(&format!(
+        "broken {} · recovered-from-sibling {} · re-acquired {}{}",
+        r.broken, r.recovered_from_sibling, r.reacquired, if r.dry_run { " [dry-run]" } else { "" }
+    ));
+    if !r.still_broken.is_empty() {
+        ui::warn(&format!("{} still broken (no sibling; run with --online to re-acquire):", r.still_broken.len()));
+        for s in r.still_broken.iter().take(20) {
+            println!("    {s}");
+        }
+        if r.still_broken.len() > 20 {
+            println!("    … and {} more", r.still_broken.len() - 20);
+        }
+    } else if r.broken > 0 {
+        ui::ok("all recovered");
+    }
+}
+
+fn print_identify(r: &identify::Report) {
+    ui::info(&format!(
+        "identified {} of {} · applied {} · no-match {} · failed {}",
+        r.matched, r.total, r.applied, r.no_match, r.failed
+    ));
+    for fr in &r.results {
+        if let Some(m) = &fr.matched {
+            println!(
+                "  {} → {} — {} · {} ({:.0}%)",
+                fr.file,
+                m.artist.as_deref().unwrap_or("?"),
+                m.title.as_deref().unwrap_or("?"),
+                m.album.as_deref().unwrap_or("?"),
+                m.score * 100.0
+            );
+        }
     }
 }
 
@@ -409,6 +478,21 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Identify { path, apply } => {
+            let cfg = config::load();
+            let key = cfg
+                .keys
+                .acoustid
+                .or_else(|| std::env::var("ACOUSTID_KEY").ok())
+                .context("no AcoustID application key — set [keys] acoustid in config, or $ACOUSTID_KEY (create one at https://acoustid.org/new-application; it must be the APPLICATION key, not your account key)")?;
+            let r = identify::run(&path, &key, apply)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                print_identify(&r);
+            }
+            Ok(())
+        }
         Cmd::Tag { path, compilation, album, album_artist, artist, dry_run } => {
             let edit = retag::Edit { compilation, album, album_artist, artist };
             if edit.is_noop() {
@@ -457,8 +541,32 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Recover { dir } => {
-            ui::warn(&format!("`recover` is planned — not yet implemented for {}", dir.display()));
+        Cmd::Recover { output, source, reference, online, cookies, bitrate, dry_run } => {
+            let cfg = config::load();
+            let output = output
+                .or(cfg.paths.output.clone())
+                .context("no output dir — pass one or set [paths] output")?;
+            let source = source
+                .or(cfg.paths.source.clone())
+                .context("no source dir — pass --source or set [paths] source")?;
+            let bitrate = bitrate.or(cfg.convert.bitrate).unwrap_or_else(|| "192k".into());
+            let opts = recover::Opts {
+                source,
+                references: reference,
+                online,
+                cookies,
+                storefronts: vec!["dk".into(), "us".into(), "gb".into()],
+                bitrate,
+                work_dir: temp_work(),
+                jobs: num_cpus::get(),
+                dry_run,
+            };
+            let r = recover::run(&output, &opts)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                print_recover(&r);
+            }
             Ok(())
         }
         Cmd::Cookies => cookies::diagnose(),

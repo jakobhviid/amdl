@@ -139,6 +139,31 @@ pub fn set_cover(path: &Path, cover: &Picture) -> Result<()> {
     Ok(())
 }
 
+/// Set title/artist/album on a file (only the provided fields), preserving the
+/// rest. Used by `identify` to write an AcoustID match.
+pub fn write_fields(path: &Path, title: Option<&str>, artist: Option<&str>, album: Option<&str>) -> Result<()> {
+    let mut tagged = Probe::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read()?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::VorbisComments));
+    }
+    let tag = tagged.primary_tag_mut().expect("tag present");
+    if let Some(t) = title {
+        tag.set_title(t.to_string());
+    }
+    if let Some(a) = artist {
+        tag.set_artist(a.to_string());
+    }
+    if let Some(al) = album {
+        tag.set_album(al.to_string());
+    }
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("save tags to {}", path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_junk_key;

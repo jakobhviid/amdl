@@ -11,6 +11,7 @@ class Amdl < Formula
     sha256 cellar: :any_skip_relocation, x86_64_linux: "@BOTTLE_SHA@"
   end
 
+  depends_on "chromaprint" # fpcalc, for `identify`
   depends_on "ffmpeg"
   depends_on "gamdl"
 

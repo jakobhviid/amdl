@@ -101,7 +101,8 @@ amdl <command> [options]
 | `lyrics [output]` | LRCLIB backfill — write synced (preferred) or plain `.lrc` into the library. State-only, skip-existing. |
 | `tag <path>` | Set tags across a file/folder — `--compilation` groups a Various-Artists album (`albumartist=Various Artists` + `compilation=1`); also `--album/--artist/--album-artist`. `--dry-run`. |
 | `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |
-| `recover <dir>` | *(planned)* Re-acquire broken/missing library files by their metadata. |
+| `identify <path>` | Fix untagged/mis-tagged tracks by **sound** (AcoustID fingerprint via `fpcalc`); `--apply` writes artist/title/album. Needs `[keys] acoustid`. |
+| `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl. `--dry-run`. |
 | `cookies` | Report which login cookies amdl would use, no download. |
 
 `--json` (global) makes `convert`/`doctor`/`config` emit machine-readable output
@@ -126,19 +127,18 @@ one). Full recipes in **[WORKFLOWS.md](WORKFLOWS.md)**.
 
 ## Status / roadmap
 
-**Done:** `download`; `convert` with real cover embedding + junk-strip + `.lrc`
-mirroring + skip-existing; the `doctor` health/integrity scan; `covers` backfill
-(copy-from-source + cross-library, validated + square-cropped, dry-run, straggler
-list); `lyrics` (LRCLIB synced/plain backfill, state-only); `tag`
-(compilation grouping + album/artist setters); `--json`; the `amdl-core` library
-crate; and lazy config. Parallel throughout, animated bars.
+**Done:** `download`; `convert` (real cover embedding + junk-strip + `.lrc`
+mirroring + skip-existing, and **copy-verbatim** when the source is already
+Opus); `doctor` health/integrity scan; **`covers`** — the full funnel
+(source → cross-library → `--online` MusicBrainz/CAA→iTunes→Discogs waterfall →
+`--paste` human tail), artist+album-gated, validated + square-cropped;
+`lyrics` (LRCLIB, state-only); `tag` (compilation grouping + setters);
+**`identify`** (AcoustID fingerprint); **`recover`** (cross-library copy + gamdl
+re-acquire); `--json` everywhere; the `amdl-core` library crate; and lazy config
+(paths, Opus quality, API keys). Parallel throughout, animated progress bars.
 
-**Planned** (ported from the original Python tool, adapted to the generic
-source→output model): `covers` **network passes** (MusicBrainz/CAA → iTunes →
-Discogs waterfall + numbered "paste a URL" human tail),
-`recover` (detect → metadata fallback → cross-library copy → re-acquire),
-`identify` (AcoustID), advanced `tag` ops (untagged recovery from folder/siblings,
-duplicate/orphan detection), and Navidrome delivery. See [WORKFLOWS.md](WORKFLOWS.md).
+**Planned:** advanced `tag` ops (untagged recovery from siblings, duplicate/orphan
+detection), a first-class `undo`, and Navidrome delivery. See [WORKFLOWS.md](WORKFLOWS.md).
 
 ## License
 
