@@ -34,9 +34,9 @@ enum Cmd {
         /// Keep the intermediate .m4a work dir instead of deleting it.
         #[arg(long)]
         keep_work: bool,
-        /// Opus bitrate.
-        #[arg(long, default_value = "192k")]
-        bitrate: String,
+        /// Opus bitrate/quality (default: config [convert] bitrate, else 192k).
+        #[arg(long)]
+        bitrate: Option<String>,
         /// Parallel conversion jobs (default: CPU count).
         #[arg(short, long)]
         jobs: Option<usize>,
@@ -56,8 +56,9 @@ enum Cmd {
         src: Option<PathBuf>,
         /// Output/derived library (default: config [paths] output, else cwd).
         dest: Option<PathBuf>,
-        #[arg(long, default_value = "192k")]
-        bitrate: String,
+        /// Opus bitrate/quality (default: config [convert] bitrate, else 192k).
+        #[arg(long)]
+        bitrate: Option<String>,
         #[arg(short, long)]
         jobs: Option<usize>,
     },
@@ -81,6 +82,13 @@ enum Cmd {
         /// Other output libraries to borrow matching-album covers from.
         #[arg(short, long)]
         reference: Vec<PathBuf>,
+        /// Enable the online waterfall (MusicBrainz/CAA → iTunes → Discogs).
+        #[arg(long)]
+        online: bool,
+        /// After the automated passes, interactively paste a URL per remaining
+        /// album (direct image or Spotify album link) to embed across that album.
+        #[arg(long)]
+        paste: bool,
         /// Show what would change without writing.
         #[arg(long)]
         dry_run: bool,
@@ -231,10 +239,10 @@ fn print_health(h: &doctor::Health) {
 fn print_covers(r: &covers::Report) {
     let tag = if r.dry_run { " (dry-run)" } else { "" };
     ui::info(&format!("coverless albums: {}{}", r.coverless_albums, tag));
-    if r.filled_from_source + r.filled_from_reference > 0 {
+    if r.albums_filled > 0 {
         ui::ok(&format!(
-            "filled {} album(s) — {} tracks from source, {} from reference",
-            r.albums_filled, r.filled_from_source, r.filled_from_reference
+            "filled {} album(s) — {} from source, {} from reference, {} online",
+            r.albums_filled, r.filled_from_source, r.filled_from_reference, r.filled_online
         ));
     }
     if !r.stragglers.is_empty() {
@@ -245,6 +253,52 @@ fn print_covers(r: &covers::Report) {
     } else if r.coverless_albums > 0 {
         ui::ok("all coverless albums resolved");
     }
+}
+
+/// Interactive human-tail: list the remaining coverless albums (most tracks
+/// first) and let the operator paste a URL per album; each is embedded across
+/// the whole album.
+fn run_paste(output: &std::path::Path, min_dim: u32) -> Result<()> {
+    let albums = covers::coverless_albums(output);
+    if albums.is_empty() {
+        ui::ok("no coverless albums remain — nothing to paste");
+        return Ok(());
+    }
+    println!();
+    ui::info(&format!("{} album(s) still need a cover (most tracks first):", albums.len()));
+    for (i, a) in albums.iter().enumerate() {
+        println!("  {:>3}. {} — {} ({} tracks)", i + 1, a.display, a.artist, a.tracks.len());
+    }
+    println!();
+    ui::info("Paste  <number> <url>  per album — a direct image URL or a Spotify album link. Blank line to finish.");
+    loop {
+        let line = ui::ask("cover>");
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            break;
+        }
+        let mut it = line.splitn(2, char::is_whitespace);
+        let num = it.next().unwrap_or("");
+        let url = it.next().unwrap_or("").trim();
+        let Ok(n) = num.parse::<usize>() else {
+            ui::warn("format: <number> <url>");
+            continue;
+        };
+        if n == 0 || n > albums.len() {
+            ui::warn("number out of range");
+            continue;
+        }
+        if url.is_empty() {
+            ui::warn("need a URL after the number");
+            continue;
+        }
+        let album = &albums[n - 1];
+        match covers::embed_from_url(&album.tracks, url, min_dim) {
+            Ok(c) => ui::ok(&format!("embedded into {c} track(s) of \"{}\"", album.display)),
+            Err(e) => ui::err(&e.to_string()),
+        }
+    }
+    Ok(())
 }
 
 /// Restore default SIGPIPE so piping output into `head`/`less` exits quietly.
@@ -265,11 +319,14 @@ fn main() -> Result<()> {
     let json = cli.json;
     match cli.cmd {
         Cmd::Download { urls, out, cookies, work_dir, keep_work, bitrate, jobs, storefront, fallback, no_convert } => {
+            let cfg = config::load();
+            let out = out.or(cfg.paths.output).unwrap_or_else(cwd);
+            let bitrate = bitrate.or(cfg.convert.bitrate).unwrap_or_else(|| "192k".into());
             let mut storefronts = vec![storefront];
             storefronts.extend(fallback.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from));
             cmd_download(
                 urls,
-                out.unwrap_or_else(cwd),
+                out,
                 cookies,
                 work_dir.unwrap_or_else(temp_work),
                 keep_work,
@@ -285,13 +342,14 @@ fn main() -> Result<()> {
                 .or(cfg.paths.source)
                 .context("no source dir — pass one or set [paths] source in ~/.config/amdl/config.toml")?;
             let dest = dest.or(cfg.paths.output).unwrap_or_else(cwd);
+            let bitrate = bitrate.or(cfg.convert.bitrate).unwrap_or_else(|| "192k".into());
             let r = convert::convert_dir(&src, &dest, &bitrate, jobs.unwrap_or_else(num_cpus::get))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
                 ui::ok(&format!(
-                    "converted {} · skipped {} · failed {} · {} with cover · {} lrc",
-                    r.converted, r.skipped, r.failed, r.with_cover, r.lrc_copied
+                    "converted {} · copied {} · skipped {} · failed {} · {} with cover · {} lrc",
+                    r.converted, r.copied, r.skipped, r.failed, r.with_cover, r.lrc_copied
                 ));
             }
             Ok(())
@@ -310,18 +368,28 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Covers { output, source, reference, dry_run, min_dim } => {
+        Cmd::Covers { output, source, reference, online, paste, dry_run, min_dim } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
             let source = source.or(cfg.paths.source.clone());
-            let opts = covers::Opts { source, references: reference, dry_run, min_dim };
+            let opts = covers::Opts {
+                source,
+                references: reference,
+                online,
+                discogs: cfg.keys.discogs.clone(),
+                dry_run,
+                min_dim,
+            };
             let r = covers::backfill(&output, &opts);
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
                 print_covers(&r);
+            }
+            if paste && !dry_run {
+                run_paste(&output, min_dim)?;
             }
             Ok(())
         }

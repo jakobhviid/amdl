@@ -118,6 +118,27 @@ pub fn finalize_opus(opus: &Path, cover: Option<&Picture>) -> Result<bool> {
     Ok(embedded)
 }
 
+/// Force-set the front cover (replacing any existing pictures) and strip junk —
+/// used by the paste-a-URL flow, where the operator has chosen the album's art.
+pub fn set_cover(path: &Path, cover: &Picture) -> Result<()> {
+    let mut tagged = Probe::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read()?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::VorbisComments));
+    }
+    let tag = tagged.primary_tag_mut().expect("tag present");
+    strip_junk(tag);
+    while !tag.pictures().is_empty() {
+        tag.remove_picture(0);
+    }
+    tag.push_picture(cover.clone());
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("save cover to {}", path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_junk_key;

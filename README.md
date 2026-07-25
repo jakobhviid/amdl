@@ -97,7 +97,7 @@ amdl <command> [options]
 | `download <url>…` | Fetch via gamdl, then validate → Opus → into your library. |
 | `convert [src] [dest]` | Transcode `.m4a`/`.mp3` → Opus with **fidelity**: re-embeds the source cover as a real `METADATA_BLOCK_PICTURE`, strips iTunes junk, mirrors `.lrc`, skip-existing (resumable). Paths default to config. |
 | `doctor [output]` | Health/integrity scan: missing covers/tags, unreadable, and — with `--source` — **truncated** (decoded vs source duration) + **unconverted** source files. |
-| `covers [output]` | Backfill missing covers: copy-from-source + cross-library (`--reference`), validated + square-cropped, per album; numbered straggler list for the rest. `--dry-run`. |
+| `covers [output]` | Backfill missing covers — funnel: source → cross-library (`--reference`) → `--online` waterfall (MB/CAA→iTunes→Discogs) → `--paste` human tail (URL/Spotify per album). Validated + square-cropped, per album, artist+album-gated. `--dry-run`. |
 | `lyrics [output]` | LRCLIB backfill — write synced (preferred) or plain `.lrc` into the library. State-only, skip-existing. |
 | `tag <path>` | Set tags across a file/folder — `--compilation` groups a Various-Artists album (`albumartist=Various Artists` + `compilation=1`); also `--album/--artist/--album-artist`. `--dry-run`. |
 | `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |

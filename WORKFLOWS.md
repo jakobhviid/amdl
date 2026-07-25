@@ -117,36 +117,46 @@ Deleting derived output files is fine; **never delete source originals.**
 
 ---
 
-## W4 — Cover backfill (funnel; cheapest+safest first)
+## W4 — Cover backfill (the full funnel: cheapest+safest → manual)
 
-Backfill missing Opus covers. Run as a funnel so each pass shrinks the problem
-before the next. **Implemented today:** the two free, always-correct passes plus
-the human straggler list; every embedded image is validated (decodes, min edge)
-and square-cropped, and only *coverless* tracks are touched (a blank cover beats
-a wrong one). Covers apply per normalized album (multi-disc/editions group).
+Backfill missing Opus covers as an ordered funnel, so each pass shrinks the
+problem before the next, riskier one. Every embedded image is validated
+(decodes, min edge ≥250px) and square-cropped; covers apply **per normalized
+album** (multi-disc/editions group) and only onto *coverless* tracks. Online
+matches are gated on artist+album agreeing — **a blank cover beats a wrong one.**
 
 ```sh
-# 1. copy-from-source: the source file still had art convert didn't need
-amdl covers /music/lib --source /music/originals
-# 2. cross-library: a sibling library already has the same album covered (free, correct)
-amdl covers /music/lib --reference /music/otherlib --reference /music/third
-# both passes in one go, preview first:
-amdl covers /music/lib --source /music/originals --reference /music/otherlib --dry-run
-amdl covers /music/lib --source /music/originals --reference /music/otherlib --json | jq '.stragglers'
+# passes 1–2 (free, always-correct): source file art, then a sibling library
+amdl covers /music/lib --source /music/originals --reference /music/otherlib
+
+# pass 3 (online waterfall): MusicBrainz/CAA → iTunes → Discogs (needs [keys] for Discogs)
+amdl covers /music/lib --source /music/originals --online
+
+# preview / scriptable
+amdl covers /music/lib --source /music/originals --online --dry-run
+amdl covers /music/lib --online --json | jq '.stragglers'   # {n, album, artist, tracks} most-first
 ```
 
-Whatever's left is a **numbered straggler list** (album, artist, track count,
-impact-sorted) — the genuine long tail. The network waterfall
-(MusicBrainz/CAA → iTunes → Discogs) and the "paste a URL per number" human pass
-are **planned** (below); until then, resolve stragglers with the Python tool.
+**Pass 4 — the human tail (`--paste`).** Whatever's still uncovered is listed as
+a numbered, **most-tracks-first** straggler list; paste one URL per album (a
+direct image URL *or* a Spotify album link, whose `og:image` is extracted) and it
+is embedded across **every track of that album** (album-level — even a one-track
+album):
+
+```sh
+amdl covers /music/lib --source /music/originals --online --paste
+#   3 album(s) still need a cover (most tracks first):
+#     1. Some Danish Comp — Various Artists (18 tracks)
+#     2. …
+#   cover> 1 https://open.spotify.com/album/xxxx     ← pasted; embeds across all 18
+#   cover>                                           ← blank line to finish
+```
 
 ## recovery, identification — planned
 
 On the roadmap (ported from the original Python tool, adapted to source→output).
 **Not yet implemented**; use the Python tool + scripts for these:
 
-- **`covers` network passes** — MB/CAA → iTunes → Discogs auto-waterfall
-  (confidence-gated, generic-title guard) + numbered "paste a URL" human tail.
 - **`recover`** — detect broken/unconverted → resolve metadata (tags, else
   folder/sibling) → cross-library copy if a reference has it, else re-acquire via
   gamdl → place in output, retagged to group with its album siblings.

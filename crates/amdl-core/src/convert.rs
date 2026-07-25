@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub converted: usize,
+    pub copied: usize,
     pub skipped: usize,
     pub failed: usize,
     pub with_cover: usize,
@@ -46,7 +47,8 @@ pub fn convert_files(
         return Ok(Report::default());
     }
     let pb = ui::bar(files.len() as u64, "Converting → Opus");
-    let (conv, skip, fail, cover, lrc) = (
+    let (conv, copied, skip, fail, cover, lrc) = (
+        AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
@@ -63,7 +65,11 @@ pub fn convert_files(
                     if o.skipped {
                         skip.fetch_add(1, Ordering::Relaxed);
                     } else {
-                        conv.fetch_add(1, Ordering::Relaxed);
+                        if o.copied {
+                            copied.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            conv.fetch_add(1, Ordering::Relaxed);
+                        }
                         if o.cover {
                             cover.fetch_add(1, Ordering::Relaxed);
                         }
@@ -83,6 +89,7 @@ pub fn convert_files(
     pb.finish_and_clear();
     Ok(Report {
         converted: conv.into_inner(),
+        copied: copied.into_inner(),
         skipped: skip.into_inner(),
         failed: fail.into_inner(),
         with_cover: cover.into_inner(),
@@ -94,6 +101,7 @@ struct Outcome {
     skipped: bool,
     cover: bool,
     lrc: bool,
+    copied: bool,
 }
 
 fn convert_one(inp: &Path, out: &Path, bitrate: &str) -> Result<Outcome> {
@@ -106,7 +114,15 @@ fn convert_one(inp: &Path, out: &Path, bitrate: &str) -> Result<Outcome> {
 
     // Skip-existing (resumable): never re-encode a file that's already there.
     if out.exists() {
-        return Ok(Outcome { skipped: true, cover: false, lrc });
+        return Ok(Outcome { skipped: true, cover: false, lrc, copied: false });
+    }
+
+    // Source is already Opus → copy verbatim. Re-encoding lossy→lossy would just
+    // shed quality for no reason.
+    if inp.extension().and_then(|e| e.to_str()) == Some("opus") {
+        std::fs::copy(inp, out)?;
+        let cover = tags::has_cover(out);
+        return Ok(Outcome { skipped: false, cover, lrc, copied: true });
     }
 
     let status = Command::new("ffmpeg")
@@ -127,7 +143,7 @@ fn convert_one(inp: &Path, out: &Path, bitrate: &str) -> Result<Outcome> {
     // Fidelity pass: strip junk + re-embed the source cover as METADATA_BLOCK_PICTURE.
     let cover = tags::read_cover(inp);
     let embedded = tags::finalize_opus(out, cover.as_ref()).unwrap_or(false);
-    Ok(Outcome { skipped: false, cover: embedded, lrc })
+    Ok(Outcome { skipped: false, cover: embedded, lrc, copied: false })
 }
 
 /// Copy `inp`'s sibling `.lrc` into the output tree if present and not already there.
@@ -146,7 +162,9 @@ fn mirror_lrc(inp: &Path, out: &Path) -> bool {
 fn list_audio(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     walk(dir, &mut out);
-    out.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("m4a") | Some("mp3")));
+    out.retain(|p| {
+        matches!(p.extension().and_then(|e| e.to_str()), Some("m4a") | Some("mp3") | Some("opus"))
+    });
     out.sort();
     out
 }
