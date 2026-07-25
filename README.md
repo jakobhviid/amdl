@@ -15,6 +15,13 @@ Source directories are treated as **read-only input**; everything is written to
 the **output** directory. See **[WORKFLOWS.md](WORKFLOWS.md)** for end-to-end
 recipes (build a library, health-scan, repair truncation).
 
+**LLM/agent-friendly.** amdl is built to be driven by an LLM as much as a human:
+every batch command takes `--json`, and **`amdl --llm`** (a documentation flag,
+like `--help`) prints one self-contained guide — every command *and* the full
+end-to-end workflows — so an agent can learn the whole tool from a single call and
+drive it from zero. Every `--help` and the man page also carry the repo URL for
+source inspection.
+
 > **Acquisition is [gamdl](https://github.com/glomatico/gamdl)'s job, not amdl's.**
 > amdl only *thin-wraps* a slice of gamdl (kick off a fetch, then process what it
 > produces) so `download`/`recover` are one command. Anything about the
@@ -99,25 +106,25 @@ amdl <command> [options]
 | Command | What it does |
 |---------|--------------|
 | `download <url>…` | Fetch via gamdl, then validate → Opus → into your library. |
-| `convert [src] [dest]` | Transcode `.m4a`/`.mp3` → Opus with **fidelity**: re-embeds the source cover as a real `METADATA_BLOCK_PICTURE`, strips iTunes junk, mirrors `.lrc`, skip-existing (resumable). Paths default to config. |
-| `doctor [output]` | Health/integrity scan: missing covers/tags, unreadable, and — with `--source` — **truncated** (decoded vs source duration) + **unconverted** source files. |
-| `covers [output]` | Backfill missing covers — funnel: source → cross-library (`--reference`) → `--online` waterfall (MB/CAA→iTunes→Discogs) → `--paste` human tail (URL/Spotify per album). Validated + square-cropped, per album, artist+album-gated. `--dry-run`. |
+| `convert [src] [dest]` | Transcode `.m4a`/`.mp3`/`.flac` → Opus with **fidelity**: re-embeds the source cover as a real `METADATA_BLOCK_PICTURE`, strips iTunes junk, mirrors `.lrc`, skip-existing (resumable). Paths default to config. |
+| `doctor [output]` | Health/integrity scan: missing covers/tags, unreadable, and — with `--source` — **truncated** (decoded vs source duration) + **unconverted** source files. `--deep` full-decodes every Opus to catch **corruption** with no source needed. |
+| `covers [output]` | Backfill missing covers — funnel: source → cross-library (`--reference`) → `--online` waterfall (MB/CAA→iTunes→Discogs) → `--paste` human tail (or `--paste-file` for scripts). Validated + square-cropped, per album, artist+album-gated. `--dry-run`. |
 | `lyrics [output]` | LRCLIB backfill — write synced (preferred) or plain `.lrc` into the library. State-only, skip-existing. |
 | `tag <path>` | Set tags across a file/folder — `--compilation` groups a Various-Artists album (`albumartist=Various Artists` + `compilation=1`); also `--album/--artist/--album-artist`. `--dry-run`. |
 | `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |
-| `identify <path>` | Fix untagged/mis-tagged tracks by **sound** (AcoustID fingerprint via `fpcalc`); `--apply` writes artist/title/album. Needs `[keys] acoustid`. |
-| `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl. Recovered tracks are **regrouped** to their album siblings (so they don't split out under Apple's own album tag). `--dry-run`. |
+| `identify <path>` | Fix untagged/mis-tagged tracks by **sound** (AcoustID fingerprint via `fpcalc`); `--apply` writes artist/title/album only at/above `--min-score` (default 0.9 — a wrong tag is worse than none). `--dry-run`, `--skip-tagged`. Needs `[keys] acoustid`. |
+| `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl (verified on title+duration). Recovered tracks are **regrouped** to their album siblings (so they don't split out under Apple's own album tag). `--dry-run`. |
 | `dedup [output]` | **Surface** (never delete) redundant tracks: exact-duplicate recordings + subset editions (Standard ⊂ Deluxe), with paths to remove and which copy to keep. `--print-rm` emits `rm` lines for you to review. |
 | `cookies` | Report which login cookies amdl would use, no download. |
-| `llm` | Print a full **LLM-readable guide** to stdout — every command + the end-to-end workflows + the repo link — so an agent can drive amdl from zero. |
 
 `--json` (global) makes every batch command emit a machine-readable report
 for scripting. Common flags: `--bitrate 192k`, `-j/--jobs`, `-o/--out`,
 `--cookies`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,
 `--no-convert`. Also `--version`, `--help`, shell completions, a man page
-(`man amdl`), and **`amdl llm`** — a single machine-readable dump (commands +
-workflows + repo link) for an LLM/agent. Every `--help` and the man page also
-carry the repo URL so an agent can inspect the source.
+(`man amdl`), and **`--llm`** — a documentation flag (like `--help`) that dumps a
+single machine-readable guide (commands + workflows + repo link) for an LLM/agent.
+Every `--help` and the man page also carry the repo URL so an agent can inspect
+the source.
 
 ## Typical use
 
@@ -136,15 +143,17 @@ one). Full recipes in **[WORKFLOWS.md](WORKFLOWS.md)**.
 ## Status / roadmap
 
 **Done:** `download`; `convert` (real cover embedding + junk-strip + `.lrc`
-mirroring + skip-existing, and **copy-verbatim** when the source is already
-Opus); `doctor` health/integrity scan; **`covers`** — the full funnel
-(source → cross-library → `--online` MusicBrainz/CAA→iTunes→Discogs waterfall →
-`--paste` human tail), artist+album-gated, validated + square-cropped;
-`lyrics` (LRCLIB, state-only); `tag` (compilation grouping + setters);
-**`identify`** (AcoustID fingerprint); **`recover`** (cross-library copy + gamdl
-re-acquire, with sibling regrouping); **`dedup`** (duplicate/orphan surfacing,
-never deletes); `--json` everywhere; the `amdl-core` library crate; and lazy
-config (paths, Opus quality, API keys). Parallel throughout, animated progress bars.
+mirroring + skip-existing, `.flac` input, and **copy-verbatim** when the source is
+already Opus); `doctor` health/integrity scan + `--deep` full-decode corruption
+check; **`covers`** — the full funnel (source → cross-library → `--online`
+MusicBrainz/CAA→iTunes→Discogs waterfall → `--paste`/`--paste-file` tail),
+artist+album-gated, validated + square-cropped; `lyrics` (LRCLIB, state-only);
+`tag` (compilation grouping + setters); **`identify`** (AcoustID fingerprint,
+score-gated `--apply` + `--dry-run`); **`recover`** (cross-library copy + gamdl
+re-acquire, title+duration-verified, with sibling regrouping); **`dedup`**
+(duplicate/orphan surfacing, never deletes); `--json` everywhere and **`--llm`**
+(full agent guide); the `amdl-core` library crate; and lazy config (paths, Opus
+quality, API keys). Parallel throughout, animated progress bars.
 
 **Planned:** a first-class `undo` (revert the last run's writes). Delivery/serving
 is intentionally out of scope — that's your media server's job (Navidrome, say,

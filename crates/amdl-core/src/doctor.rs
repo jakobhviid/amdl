@@ -24,6 +24,8 @@ pub struct Health {
     pub missing_cover: Vec<String>,
     pub missing_tags: Vec<String>,
     pub truncated: Vec<String>,
+    /// Files that fail a full decode (`--deep`) — corruption the header/probe hides.
+    pub corrupt: Vec<String>,
     pub source_without_opus: Vec<String>,
 }
 
@@ -33,6 +35,7 @@ impl Health {
             && self.missing_cover.is_empty()
             && self.missing_tags.is_empty()
             && self.truncated.is_empty()
+            && self.corrupt.is_empty()
             && self.source_without_opus.is_empty()
     }
 }
@@ -57,7 +60,7 @@ fn rel_display(base: &Path, p: &Path) -> String {
 /// Locate the source audio file (.m4a/.mp3) that would have produced `opus`.
 fn source_for(opus: &Path, output: &Path, source: &Path) -> Option<PathBuf> {
     let rel = opus.strip_prefix(output).ok()?;
-    for ext in ["m4a", "mp3"] {
+    for ext in ["m4a", "mp3", "flac"] {
         let cand = source.join(rel).with_extension(ext);
         if cand.exists() {
             return Some(cand);
@@ -66,14 +69,14 @@ fn source_for(opus: &Path, output: &Path, source: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn scan(output: &Path, source: Option<&Path>) -> Health {
+pub fn scan(output: &Path, source: Option<&Path>, deep: bool) -> Health {
     let opus = list_ext(output, "opus");
     let mut health = Health {
         total: opus.len(),
         ..Default::default()
     };
 
-    let pb = ui::bar(opus.len() as u64, "Scanning");
+    let pb = ui::bar(opus.len() as u64, if deep { "Decoding" } else { "Scanning" });
     // Per-opus checks in parallel; collect classified findings.
     let findings: Vec<(String, Vec<Finding>)> = opus
         .par_iter()
@@ -90,6 +93,11 @@ pub fn scan(output: &Path, source: Option<&Path>) -> Health {
             }
             if basic.title.is_none() || basic.artist.is_none() || basic.album.is_none() {
                 fs.push(Finding::MissingTags);
+            }
+            // Full-decode integrity check (opt-in): catches stream corruption that a
+            // metadata probe misses, and needs no source library to compare against.
+            if deep && dur.is_some() && !decodes_cleanly(o) {
+                fs.push(Finding::Corrupt);
             }
             if let (Some(src_root), Some(d)) = (source, dur) {
                 if let Some(src) = source_for(o, output, src_root) {
@@ -113,6 +121,7 @@ pub fn scan(output: &Path, source: Option<&Path>) -> Health {
                 Finding::MissingCover => health.missing_cover.push(name.clone()),
                 Finding::MissingTags => health.missing_tags.push(name.clone()),
                 Finding::Truncated => health.truncated.push(name.clone()),
+                Finding::Corrupt => health.corrupt.push(name.clone()),
             }
         }
     }
@@ -122,7 +131,7 @@ pub fn scan(output: &Path, source: Option<&Path>) -> Health {
         let srcs = {
             let mut v = Vec::new();
             walk(src_root, &mut v);
-            v.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("m4a") | Some("mp3")));
+            v.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("m4a") | Some("mp3") | Some("flac")));
             v
         };
         for s in &srcs {
@@ -139,8 +148,23 @@ pub fn scan(output: &Path, source: Option<&Path>) -> Health {
     health.missing_cover.sort();
     health.missing_tags.sort();
     health.truncated.sort();
+    health.corrupt.sort();
     health.source_without_opus.sort();
     health
+}
+
+/// A full decode with no errors on stderr (`-v error`). ffmpeg can exit 0 while
+/// still logging decode errors, so any error output means corruption.
+fn decodes_cleanly(path: &Path) -> bool {
+    match Command::new("ffmpeg")
+        .args(["-v", "error", "-xerror", "-i"])
+        .arg(path)
+        .args(["-f", "null", "-"])
+        .output()
+    {
+        Ok(out) => out.status.success() && out.stderr.is_empty(),
+        Err(_) => true, // ffmpeg missing → don't cry corruption; probe already ran
+    }
 }
 
 enum Finding {
@@ -148,6 +172,7 @@ enum Finding {
     MissingCover,
     MissingTags,
     Truncated,
+    Corrupt,
 }
 
 fn list_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {

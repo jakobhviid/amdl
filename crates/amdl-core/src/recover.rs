@@ -69,7 +69,7 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
     let mut report = Report { dry_run: opts.dry_run, ..Default::default() };
 
     // Detect: source audio files that have no corresponding Opus in the output.
-    let sources = list_audio(&opts.source, &["m4a", "mp3", "opus"]);
+    let sources = list_audio(&opts.source, &["m4a", "mp3", "opus", "flac"]);
     let broken: Vec<PathBuf> = sources
         .into_iter()
         .filter(|s| {
@@ -112,7 +112,8 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
         if opts.online && !opts.dry_run {
             if let Some(artist) = artist.as_deref() {
                 let dir = out.parent().unwrap_or(output).to_path_buf();
-                if let Ok(Some(new_files)) = reacquire(&artist_title(artist, &title), src, output, opts) {
+                let want_dur = tags::duration_secs(src).unwrap_or(0);
+                if let Ok(Some(new_files)) = reacquire(&artist_title(artist, &title), &title, want_dur, src, output, opts) {
                     report.reacquired += 1;
                     report.regrouped += regroup_to_sibling(&new_files, &dir, false);
                     pb.inc(1);
@@ -141,9 +142,11 @@ fn artist_title(artist: &str, title: &str) -> String {
 /// Resolve `term` to an Apple Music song URL (iTunes search), download via gamdl,
 /// convert to Opus into `output` at the same relative path as `src`. Returns the
 /// newly-written Opus paths on success (so the caller can regroup them), or `None`
-/// if the track couldn't be resolved/fetched.
-fn reacquire(term: &str, src: &Path, output: &Path, opts: &Opts) -> Result<Option<Vec<PathBuf>>> {
-    let Some(url) = itunes_song_url(term) else {
+/// if the track couldn't be resolved/fetched. The candidate is verified against
+/// `want_title` + `want_dur` first — a blank recovery beats a wrong recording, and
+/// getting it wrong is now worse because the file is then regrouped into the album.
+fn reacquire(term: &str, want_title: &str, want_dur: u64, src: &Path, output: &Path, opts: &Opts) -> Result<Option<Vec<PathBuf>>> {
+    let Some(url) = itunes_song_url(term, want_title, want_dur) else {
         return Ok(None);
     };
     let cookies = crate::cookies::resolve(opts.cookies.clone(), false)?;
@@ -220,21 +223,51 @@ fn grouping_from_sibling(sibling_album: Option<&str>, sibling_album_artist: Opti
     Some((album.to_string(), sibling_album_artist == Some("Various Artists")))
 }
 
-fn itunes_song_url(term: &str) -> Option<String> {
+/// Search iTunes and return the first result whose **title matches** and whose
+/// **duration is within ~3 s** of the broken track — so we don't grab a live cut,
+/// remix, or wrong version. If we can't verify (no known duration), we require an
+/// exact normalized-title match instead.
+fn itunes_song_url(term: &str, want_title: &str, want_dur: u64) -> Option<String> {
     let text = ureq::get("https://itunes.apple.com/search")
         .set("User-Agent", UA)
         .query("term", term)
         .query("entity", "song")
-        .query("limit", "5")
+        .query("limit", "15")
         .call()
         .ok()?
         .into_string()
         .ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    v.get("results")?
-        .as_array()?
-        .iter()
-        .find_map(|r| r.get("trackViewUrl").and_then(|x| x.as_str()).map(String::from))
+    for r in v.get("results")?.as_array()? {
+        let cand_title = r.get("trackName").and_then(|x| x.as_str()).unwrap_or("");
+        let cand_dur = r.get("trackTimeMillis").and_then(|x| x.as_f64()).map(|ms| (ms / 1000.0).round() as u64);
+        if !recording_matches(want_title, want_dur, cand_title, cand_dur) {
+            continue;
+        }
+        if let Some(u) = r.get("trackViewUrl").and_then(|x| x.as_str()) {
+            return Some(u.to_string());
+        }
+    }
+    None
+}
+
+/// Whether an iTunes candidate is the same recording as the broken track: titles
+/// overlap (normalized) AND, when we know the source duration, they agree within
+/// ~3 s. With no known duration, fall back to a strict normalized-title equality.
+fn recording_matches(want_title: &str, want_dur: u64, cand_title: &str, cand_dur: Option<u64>) -> bool {
+    let (w, c) = (norm(want_title), norm(cand_title));
+    if w.is_empty() {
+        return false;
+    }
+    let title_ok = w == c || c.contains(&w) || w.contains(&c);
+    if !title_ok {
+        return false;
+    }
+    match (want_dur, cand_dur) {
+        (0, _) => w == c,                                   // can't verify → demand exact title
+        (want, Some(cand)) => want.abs_diff(cand) <= 3,     // known duration → gate on it
+        (_, None) => w == c,                                // candidate has no duration → exact title
+    }
 }
 
 fn reference_index(references: &[PathBuf]) -> HashMap<Key, PathBuf> {
@@ -272,7 +305,20 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::grouping_from_sibling;
+    use super::{grouping_from_sibling, recording_matches};
+
+    #[test]
+    fn recording_match_gates_on_title_and_duration() {
+        // same title, duration within tolerance → accept
+        assert!(recording_matches("La Voix", 200, "La Voix", Some(201)));
+        // right title but a live cut with a very different length → reject
+        assert!(!recording_matches("La Voix", 200, "La Voix (Live)", Some(260)));
+        // wrong title entirely → reject even if duration lines up
+        assert!(!recording_matches("La Voix", 200, "Another Song", Some(200)));
+        // unknown source duration → demand an exact normalized-title match
+        assert!(recording_matches("La Voix", 0, "la voix", None));
+        assert!(!recording_matches("La Voix", 0, "La Voix (Radio Edit)", None));
+    }
 
     #[test]
     fn sibling_grouping_infers_compilation_from_album_artist() {

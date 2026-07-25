@@ -9,7 +9,7 @@ use std::path::PathBuf;
 const REPO_URL: &str = "https://github.com/jakobhviid/amdl";
 const AFTER_HELP: &str = concat!(
     "Repository: https://github.com/jakobhviid/amdl (inspect the source there if needed)\n",
-    "LLM guide: run `amdl llm` for a full machine-readable reference (every command + the workflows)."
+    "LLM guide: pass `--llm` for a full machine-readable reference (every command + the workflows)."
 );
 
 #[derive(Parser)]
@@ -18,6 +18,9 @@ struct Cli {
     /// Emit machine-readable JSON instead of the human summary (composable).
     #[arg(long, global = true)]
     json: bool,
+    /// Print the full LLM-readable guide (every command + workflows + repo link) and exit.
+    #[arg(long, global = true)]
+    llm: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -65,6 +68,7 @@ enum Cmd {
         /// Opus bitrate/quality (default: config [convert] bitrate, else 192k).
         #[arg(long)]
         bitrate: Option<String>,
+        /// Parallel conversion jobs (default: CPU count).
         #[arg(short, long)]
         jobs: Option<usize>,
     },
@@ -76,6 +80,10 @@ enum Cmd {
         /// Compare against this source tree to also find truncated + unconverted files.
         #[arg(short, long)]
         source: Option<PathBuf>,
+        /// Full-decode every Opus (ffmpeg) to catch stream corruption a metadata
+        /// probe misses — no source library needed. Slower (decodes all audio).
+        #[arg(long)]
+        deep: bool,
     },
     /// Backfill missing Opus cover art: copy from source, then cross-library
     /// (--reference). Prints a numbered straggler list for albums still uncovered.
@@ -95,6 +103,10 @@ enum Cmd {
         /// album (direct image or Spotify album link) to embed across that album.
         #[arg(long)]
         paste: bool,
+        /// Non-interactive paste: read `<n><TAB>url` lines (the numbers from the
+        /// straggler list / `--json`) from a file, or `-` for stdin. Scriptable.
+        #[arg(long, value_name = "FILE")]
+        paste_file: Option<PathBuf>,
         /// Show what would change without writing.
         #[arg(long)]
         dry_run: bool,
@@ -119,6 +131,17 @@ enum Cmd {
         /// Write the resolved artist/title/album (default: report only).
         #[arg(long)]
         apply: bool,
+        /// Preview what --apply would write, without touching any file.
+        #[arg(long)]
+        dry_run: bool,
+        /// Only auto-apply a match at/above this AcoustID score (0.0–1.0). A wrong
+        /// tag is worse than none, so low-confidence matches are left untouched.
+        #[arg(long, default_value_t = amdl_core::identify::DEFAULT_MIN_SCORE)]
+        min_score: f64,
+        /// Skip files that already have artist+title+album (resumes a big untagged
+        /// run). Off by default, since identify also fixes mis-tagged files.
+        #[arg(long)]
+        skip_tagged: bool,
     },
     /// Set tags across a file/folder. `--compilation` groups a Various-Artists
     /// album (albumartist=Various Artists + compilation=1); also set album/artist.
@@ -143,6 +166,7 @@ enum Cmd {
     },
     /// Show config path + values; `--init` writes a starter ~/.config/amdl/config.toml.
     Config {
+        /// Write a starter config file (won't overwrite an existing one).
         #[arg(long)]
         init: bool,
     },
@@ -183,10 +207,6 @@ enum Cmd {
     },
     /// Check login cookies: report gamdl's file and auto-detect from your browser.
     Cookies,
-    /// Print a full LLM-readable guide to stdout: every command + the end-to-end
-    /// workflows + a link to the source repo. Same content as the man page, laid
-    /// out plainly for an LLM/agent to read and drive the tool from zero.
-    Llm,
     /// Print a shell completion script (bash|zsh|fish|…) to stdout.
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -282,6 +302,7 @@ fn print_health(h: &doctor::Health) {
     cat("missing cover", &h.missing_cover);
     cat("missing tags", &h.missing_tags);
     cat("truncated", &h.truncated);
+    cat("corrupt (failed decode)", &h.corrupt);
     cat("source without opus", &h.source_without_opus);
     if h.is_clean() {
         ui::ok("clean — no issues");
@@ -298,7 +319,7 @@ fn print_covers(r: &covers::Report) {
         ));
     }
     if !r.stragglers.is_empty() {
-        ui::warn(&format!("{} album(s) still need a cover (paste a URL per number, once `covers` gains that pass):", r.stragglers.len()));
+        ui::warn(&format!("{} album(s) still need a cover — resolve by number with `--paste` (interactive) or `--paste-file <n\\turl>`:", r.stragglers.len()));
         for s in &r.stragglers {
             println!("  {:>3}. {} — {} ({} tracks)", s.n, s.album, s.artist, s.tracks);
         }
@@ -398,9 +419,10 @@ fn shell_quote(s: &str) -> String {
 }
 
 fn print_identify(r: &identify::Report) {
+    let applied = if r.dry_run { "would-apply" } else { "applied" };
     ui::info(&format!(
-        "identified {} of {} · applied {} · no-match {} · failed {}",
-        r.matched, r.total, r.applied, r.no_match, r.failed
+        "identified {} of {} · {applied} {} · low-score {} · skipped-tagged {} · no-match {} · failed {}",
+        r.matched, r.total, r.applied, r.skipped_low_score, r.skipped_tagged, r.no_match, r.failed
     ));
     for fr in &r.results {
         if let Some(m) = &fr.matched {
@@ -462,6 +484,57 @@ fn run_paste(output: &std::path::Path, min_dim: u32) -> Result<()> {
     Ok(())
 }
 
+/// Non-interactive counterpart to `run_paste`: read `<n><TAB>url` lines (numbers
+/// from the straggler list / `--json`, tab- or space-separated; `#` comments and
+/// blank lines ignored) from a file or `-` for stdin, and embed each across its
+/// album. Makes the cover funnel fully scriptable for an agent.
+fn run_paste_file(output: &std::path::Path, min_dim: u32, src: &std::path::Path) -> Result<()> {
+    let albums = covers::coverless_albums(output);
+    if albums.is_empty() {
+        ui::ok("no coverless albums remain — nothing to paste");
+        return Ok(());
+    }
+    let content = if src == std::path::Path::new("-") {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+        s
+    } else {
+        std::fs::read_to_string(src).with_context(|| format!("read {}", src.display()))?
+    };
+    let mut applied = 0usize;
+    for (i, raw) in content.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut it = line.splitn(2, |c: char| c == '\t' || c.is_whitespace());
+        let num = it.next().unwrap_or("");
+        let url = it.next().unwrap_or("").trim();
+        let Ok(n) = num.parse::<usize>() else {
+            ui::warn(&format!("line {}: expected `<n><TAB>url`", i + 1));
+            continue;
+        };
+        if n == 0 || n > albums.len() {
+            ui::warn(&format!("line {}: number {n} out of range (1..={})", i + 1, albums.len()));
+            continue;
+        }
+        if url.is_empty() {
+            ui::warn(&format!("line {}: missing url", i + 1));
+            continue;
+        }
+        let album = &albums[n - 1];
+        match covers::embed_from_url(&album.tracks, url, min_dim) {
+            Ok(c) => {
+                applied += c;
+                ui::ok(&format!("#{n} → embedded into {c} track(s) of \"{}\"", album.display));
+            }
+            Err(e) => ui::err(&format!("#{n}: {e}")),
+        }
+    }
+    ui::info(&format!("done — embedded {applied} track(s) across the pasted albums"));
+    Ok(())
+}
+
 /// Restore default SIGPIPE so piping output into `head`/`less` exits quietly.
 fn reset_sigpipe() {
     #[cfg(unix)]
@@ -472,6 +545,12 @@ fn reset_sigpipe() {
 
 fn main() -> Result<()> {
     reset_sigpipe();
+    // `--llm` is a documentation flag like `--help`: it works from anywhere and
+    // needs no subcommand, so intercept it before clap enforces one.
+    if std::env::args().skip(1).any(|a| a == "--llm") {
+        print!("{}", llm_guide());
+        return Ok(());
+    }
     let _ = ctrlc::set_handler(|| {
         eprintln!("\nCancelled.");
         std::process::exit(0);
@@ -515,13 +594,13 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Doctor { output, source } => {
+        Cmd::Doctor { output, source, deep } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output)
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
             let source = source.or(cfg.paths.source);
-            let h = doctor::scan(&output, source.as_deref());
+            let h = doctor::scan(&output, source.as_deref(), deep);
             if json {
                 println!("{}", serde_json::to_string_pretty(&h)?);
             } else {
@@ -529,7 +608,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Covers { output, source, reference, online, paste, dry_run, min_dim } => {
+        Cmd::Covers { output, source, reference, online, paste, paste_file, dry_run, min_dim } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
@@ -549,8 +628,12 @@ fn main() -> Result<()> {
             } else {
                 print_covers(&r);
             }
-            if paste && !dry_run {
-                run_paste(&output, min_dim)?;
+            if !dry_run {
+                if let Some(f) = paste_file {
+                    run_paste_file(&output, min_dim, &f)?;
+                } else if paste {
+                    run_paste(&output, min_dim)?;
+                }
             }
             Ok(())
         }
@@ -570,14 +653,15 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Identify { path, apply } => {
+        Cmd::Identify { path, apply, dry_run, min_score, skip_tagged } => {
             let cfg = config::load();
             let key = cfg
                 .keys
                 .acoustid
                 .or_else(|| std::env::var("ACOUSTID_KEY").ok())
                 .context("no AcoustID application key — set [keys] acoustid in config, or $ACOUSTID_KEY (create one at https://acoustid.org/new-application; it must be the APPLICATION key, not your account key)")?;
-            let r = identify::run(&path, &key, apply)?;
+            let iopts = identify::Opts { apply, dry_run, min_score, skip_tagged };
+            let r = identify::run(&path, &key, &iopts)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
@@ -685,10 +769,6 @@ fn main() -> Result<()> {
         }
         Cmd::Man => {
             clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
-            Ok(())
-        }
-        Cmd::Llm => {
-            print!("{}", llm_guide());
             Ok(())
         }
     }

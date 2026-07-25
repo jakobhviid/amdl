@@ -29,32 +29,62 @@ pub struct FileResult {
     pub matched: Option<Match>,
 }
 
+/// AcoustID scores below this are never auto-applied — a wrong tag is worse than
+/// none ("a blank field beats a wrong merge"), matching how covers/dedup gate.
+pub const DEFAULT_MIN_SCORE: f64 = 0.9;
+
+pub struct Opts {
+    /// Write the matched tags (else report-only).
+    pub apply: bool,
+    /// Preview what `--apply` would write without touching any file.
+    pub dry_run: bool,
+    /// Only auto-apply a match at or above this AcoustID score (0.0–1.0).
+    pub min_score: f64,
+    /// Skip files that already have artist+title+album (makes a big untagged-folder
+    /// run resumable). Opt-in: identify also *fixes* mis-tagged files, which have tags.
+    pub skip_tagged: bool,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub total: usize,
     pub matched: usize,
     pub applied: usize,
+    /// Matched but below `min_score`, so left untouched.
+    pub skipped_low_score: usize,
+    /// Skipped because they already had tags (`--skip-tagged`).
+    pub skipped_tagged: usize,
     pub no_match: usize,
     pub failed: usize,
+    pub dry_run: bool,
     pub results: Vec<FileResult>,
 }
 
-pub fn run(path: &Path, key: &str, apply: bool) -> Result<Report> {
+pub fn run(path: &Path, key: &str, opts: &Opts) -> Result<Report> {
     if which("fpcalc").is_none() {
         bail!("fpcalc not found — `brew install chromaprint`");
     }
     let files = list_audio(path);
-    let mut report = Report { total: files.len(), ..Default::default() };
+    let mut report = Report { total: files.len(), dry_run: opts.dry_run, ..Default::default() };
     let pb = ui::bar(files.len() as u64, "Identifying");
     for f in &files {
         let rel = f.strip_prefix(path).unwrap_or(f).display().to_string();
+        if opts.skip_tagged && has_all_tags(f) {
+            report.skipped_tagged += 1;
+            pb.inc(1);
+            continue;
+        }
         match identify_one(f, key) {
             Ok(Some(m)) => {
                 report.matched += 1;
-                if apply
-                    && tags::write_fields(f, m.title.as_deref(), m.artist.as_deref(), m.album.as_deref()).is_ok()
-                {
-                    report.applied += 1;
+                if opts.apply {
+                    if m.score < opts.min_score {
+                        report.skipped_low_score += 1;
+                    } else if opts.dry_run {
+                        report.applied += 1; // would apply
+                    } else if tags::write_fields(f, m.title.as_deref(), m.artist.as_deref(), m.album.as_deref()).is_ok() {
+                        report.applied += 1;
+                    }
                 }
                 report.results.push(FileResult { file: rel, matched: Some(m) });
             }
@@ -68,6 +98,12 @@ pub fn run(path: &Path, key: &str, apply: bool) -> Result<Report> {
     }
     pb.finish_and_clear();
     Ok(report)
+}
+
+fn has_all_tags(path: &Path) -> bool {
+    let b = tags::read_basic(path);
+    let ok = |o: &Option<String>| o.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+    ok(&b.artist) && ok(&b.title) && ok(&b.album)
 }
 
 fn identify_one(path: &Path, key: &str) -> Result<Option<Match>> {
@@ -161,7 +197,7 @@ fn list_audio(path: &Path) -> Vec<PathBuf> {
     }
     let mut out = Vec::new();
     walk(path, &mut out);
-    out.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("opus") | Some("m4a") | Some("mp3")));
+    out.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("opus") | Some("m4a") | Some("mp3") | Some("flac")));
     out.sort();
     out
 }

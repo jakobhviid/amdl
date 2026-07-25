@@ -84,15 +84,20 @@ originals.
 ```sh
 amdl doctor /music/lib --source /music/originals
 amdl doctor /music/lib --source /music/originals --json
+amdl doctor /music/lib --deep                      # full-decode integrity, no source needed
 ```
 
 Reports (each is a list of relative paths in `--json`):
 
 - `missing_cover` — Opus with no embedded picture.
 - `missing_tags` — missing artist/title/album.
-- `unreadable` — won't decode.
+- `unreadable` — won't even probe.
 - `truncated` — decoded Opus duration differs from the source's by > 1.5 s
   (silent-disconnect damage that skip-existing would otherwise hide forever).
+- `corrupt` — **`--deep` only**: fails a full ffmpeg decode. Catches stream
+  corruption that a metadata probe (and even `unreadable`) misses, and needs *no*
+  source library to compare against — the check for a library whose originals are
+  gone. It decodes every file, so it's opt-in and slower.
 - `source_without_opus` — a source file that never produced an Opus (conversion
   failure or damaged original).
 
@@ -152,6 +157,18 @@ amdl covers /music/lib --source /music/originals --online --paste
 #   cover>                                           ← blank line to finish
 ```
 
+**Scriptable (no TTY) — `--paste-file`.** An agent can drive the tail without a
+terminal: read the numbered stragglers from `--json`, then feed `<n><TAB>url`
+lines (tab- or space-separated; `#` comments and blank lines ignored) from a file
+or `-` for stdin. The numbers are the same deterministic most-tracks-first order.
+
+```sh
+amdl covers /music/lib --online --json | jq -r '.stragglers[] | "\(.n)\t\(.album)"'  # discover numbers
+printf '1\thttps://open.spotify.com/album/xxxx\n2\thttps://img.example/cover.jpg\n' \
+  | amdl covers /music/lib --paste-file -                                             # embed, non-interactive
+amdl covers /music/lib --paste-file covers.tsv                                        # or from a file
+```
+
 ## W5 — Fix untagged / mis-tagged tracks (`identify`)
 
 Identify a track by **sound** (AcoustID fingerprint via `fpcalc`) — the only key
@@ -160,12 +177,19 @@ that works when tags are empty or wrong. Needs an AcoustID **application** key
 <https://acoustid.org/new-application> — it is NOT your account/user key).
 
 ```sh
-amdl identify /music/lib                 # report: artist — title · album (score)
-amdl identify /music/lib --apply         # write the resolved artist/title/album
+amdl identify /music/lib                         # report only: artist — title · album (score)
+amdl identify /music/lib --apply                 # write matches at/above the score gate
+amdl identify /music/lib --apply --dry-run        # preview exactly what --apply would write
+amdl identify /music/lib --apply --min-score 0.95 # stricter gate (default 0.9)
+amdl identify /music/lib --apply --skip-tagged    # resume: skip files that already have tags
 amdl identify /music/lib --json | jq '.results[] | select(.matched)'
 ```
 
-Then hand the now-tagged album to `covers` for its art.
+`--apply` never writes a match below `--min-score` (default 0.9) — a wrong tag is
+worse than none, the same rule covers/dedup follow; those show up as `low-score`
+in the report. `--skip-tagged` makes a large untagged-folder run resumable (it's
+opt-in because identify also *fixes* mis-tagged files, which have tags). Then hand
+the now-tagged album to `covers` for its art.
 
 ## W6 — Recover broken / missing tracks (`recover`)
 
@@ -180,6 +204,11 @@ amdl recover /music/lib --source /music/originals --reference /music/otherlib
 amdl recover /music/lib --source /music/originals --online
 amdl recover /music/lib --source /music/originals --dry-run --json    # preview
 ```
+
+Re-acquisition is verified before it's accepted: the iTunes candidate must match
+the broken track's **title and duration** (±3 s), so a live cut/remix/wrong
+version is rejected to `still_broken` rather than silently substituted — the more
+so now that an accepted track is then regrouped into the album.
 
 Metadata comes from the file's tags, else the folder + filename. A re-acquired
 track carries Apple's *own* album tag, which often differs from the
