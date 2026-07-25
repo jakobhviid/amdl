@@ -21,6 +21,12 @@ struct Cli {
     /// Print the full LLM-readable guide (every command + workflows + repo link) and exit.
     #[arg(long, global = true)]
     llm: bool,
+    /// Quiet: print only the one-line result headline (and errors); no breakdown or bars.
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    quiet: bool,
+    /// Verbose: also list per-item detail (every affected file) under the summary.
+    #[arg(short, long, global = true)]
+    verbose: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -286,16 +292,35 @@ fn cmd_download(
 }
 
 fn print_health(h: &doctor::Health) {
-    ui::info(&format!("scanned {} opus", h.total));
+    use ui::Tone::{Bad, Warn};
+    let metrics = [
+        ui::tally("missing-cover", h.missing_cover.len(), Warn),
+        ui::tally("missing-tags", h.missing_tags.len(), Warn),
+        ui::tally("unreadable", h.unreadable.len(), Bad),
+        ui::tally("truncated", h.truncated.len(), Bad),
+        ui::tally("corrupt", h.corrupt.len(), Bad),
+        ui::tally("no-opus", h.source_without_opus.len(), Warn),
+    ];
+    let mut hints = Vec::new();
+    if !h.missing_cover.is_empty() { hints.push("fill covers: `amdl covers --source … --online`".to_string()); }
+    if !h.missing_tags.is_empty() { hints.push("fix tags: `amdl identify --apply` (by sound) or `amdl tag …`".to_string()); }
+    if !h.truncated.is_empty() { hints.push("truncated: delete the bad .opus, then `amdl convert` regenerates it (W3)".to_string()); }
+    if !h.corrupt.is_empty() { hints.push("corrupt: re-convert from source, or `amdl recover`".to_string()); }
+    if !h.source_without_opus.is_empty() { hints.push("unconverted sources: `amdl recover --source …`".to_string()); }
+    ui::result(&format!("doctor · {} opus scanned", h.total), false, &metrics, &hints);
+    if ui::is_quiet() {
+        return;
+    }
+    // Offending paths, capped, so the summary stays scannable (full list via --json).
     let cat = |label: &str, v: &[String]| {
-        if !v.is_empty() {
-            ui::warn(&format!("{}: {}", label, v.len()));
-            for x in v.iter().take(10) {
-                println!("    {x}");
-            }
-            if v.len() > 10 {
-                println!("    … and {} more", v.len() - 10);
-            }
+        if v.is_empty() { return; }
+        let cap = if ui::is_verbose() { v.len() } else { 8 };
+        println!("  {label}:");
+        for x in v.iter().take(cap) {
+            println!("    {x}");
+        }
+        if v.len() > cap {
+            println!("    … and {} more (--json for all, -v to list)", v.len() - cap);
         }
     };
     cat("unreadable", &h.unreadable);
@@ -304,46 +329,53 @@ fn print_health(h: &doctor::Health) {
     cat("truncated", &h.truncated);
     cat("corrupt (failed decode)", &h.corrupt);
     cat("source without opus", &h.source_without_opus);
-    if h.is_clean() {
-        ui::ok("clean — no issues");
-    }
 }
 
 fn print_covers(r: &covers::Report) {
-    let tag = if r.dry_run { " (dry-run)" } else { "" };
-    ui::info(&format!("coverless albums: {}{}", r.coverless_albums, tag));
-    if r.albums_filled > 0 {
-        ui::ok(&format!(
-            "filled {} album(s) — {} from source, {} from reference, {} online",
-            r.albums_filled, r.filled_from_source, r.filled_from_reference, r.filled_online
-        ));
-    }
+    use ui::Tone::{Good, Warn};
+    let metrics = [
+        ui::tally("filled", r.albums_filled, Good),
+        ui::tally("from-source", r.filled_from_source, Good),
+        ui::tally("from-reference", r.filled_from_reference, Good),
+        ui::tally("online", r.filled_online, Good),
+        ui::tally("still-need-cover", r.stragglers.len(), Warn),
+    ];
+    let mut hints = Vec::new();
     if !r.stragglers.is_empty() {
-        ui::warn(&format!("{} album(s) still need a cover — resolve by number with `--paste` (interactive) or `--paste-file <n\\turl>`:", r.stragglers.len()));
-        for s in &r.stragglers {
-            println!("  {:>3}. {} — {} ({} tracks)", s.n, s.album, s.artist, s.tracks);
-        }
-    } else if r.coverless_albums > 0 {
-        ui::ok("all coverless albums resolved");
+        hints.push("resolve the rest by number: `--paste` (interactive) or `--paste-file <n\\turl>` (scriptable)".to_string());
+    }
+    ui::result(&format!("covers · {} coverless album(s)", r.coverless_albums), r.dry_run, &metrics, &hints);
+    if ui::is_quiet() {
+        return;
+    }
+    for s in &r.stragglers {
+        println!("  {:>3}. {} — {} ({} tracks)", s.n, s.album, s.artist, s.tracks);
     }
 }
 
 fn print_recover(r: &recover::Report) {
-    ui::info(&format!(
-        "broken {} · recovered-from-sibling {} · re-acquired {} · regrouped {}{}",
-        r.broken, r.recovered_from_sibling, r.reacquired, r.regrouped,
-        if r.dry_run { " [dry-run]" } else { "" }
-    ));
-    if !r.still_broken.is_empty() {
-        ui::warn(&format!("{} still broken (no sibling; run with --online to re-acquire):", r.still_broken.len()));
-        for s in r.still_broken.iter().take(20) {
-            println!("    {s}");
-        }
-        if r.still_broken.len() > 20 {
-            println!("    … and {} more", r.still_broken.len() - 20);
-        }
-    } else if r.broken > 0 {
-        ui::ok("all recovered");
+    use ui::Tone::{Good, Warn};
+    let metrics = [
+        ui::tally("broken", r.broken, Warn),
+        ui::tally("from-sibling", r.recovered_from_sibling, Good),
+        ui::tally("re-acquired", r.reacquired, Good),
+        ui::tally("regrouped", r.regrouped, Good),
+        ui::tally("still-broken", r.still_broken.len(), Warn),
+    ];
+    let mut hints = Vec::new();
+    if !r.still_broken.is_empty() && !r.dry_run {
+        hints.push("still broken: try `--online` to re-acquire, or `--reference <lib>` to copy from a sibling library".to_string());
+    }
+    ui::result("recover", r.dry_run, &metrics, &hints);
+    if ui::is_quiet() {
+        return;
+    }
+    let cap = if ui::is_verbose() { r.still_broken.len() } else { 20 };
+    for s in r.still_broken.iter().take(cap) {
+        println!("    {s}");
+    }
+    if r.still_broken.len() > cap {
+        println!("    … and {} more (-v to list)", r.still_broken.len() - cap);
     }
 }
 
@@ -376,12 +408,21 @@ fn llm_guide() -> String {
 }
 
 fn print_dedup(r: &dedup::Report) {
-    ui::info(&format!(
-        "scanned {} · exact-duplicate groups {} · subset editions {}",
-        r.total, r.exact_duplicates.len(), r.subset_editions.len()
-    ));
-    if r.is_clean() {
-        ui::ok("no duplicates or orphan editions found");
+    use ui::Tone::Warn;
+    let redundant: usize = r.exact_duplicates.iter().map(|d| d.remove.len()).sum::<usize>()
+        + r.subset_editions.iter().map(|s| s.remove.len()).sum::<usize>();
+    let metrics = [
+        ui::tally("duplicate-groups", r.exact_duplicates.len(), Warn),
+        ui::tally("subset-editions", r.subset_editions.len(), Warn),
+        ui::tally("redundant-files", redundant, Warn),
+    ];
+    let hints = if r.is_clean() {
+        Vec::new()
+    } else {
+        vec!["nothing was deleted — review, then remove yourself or with `amdl dedup --print-rm`".to_string()]
+    };
+    ui::result(&format!("dedup · {} tracks scanned", r.total), false, &metrics, &hints);
+    if r.is_clean() || ui::is_quiet() {
         return;
     }
     if !r.exact_duplicates.is_empty() {
@@ -410,7 +451,6 @@ fn print_dedup(r: &dedup::Report) {
             println!("    … and {} more", r.subset_editions.len() - 30);
         }
     }
-    ui::info("nothing was deleted — review, then remove yourself (or `amdl dedup --print-rm`).");
 }
 
 /// Single-quote a path for a POSIX shell (for `--print-rm` output).
@@ -419,11 +459,27 @@ fn shell_quote(s: &str) -> String {
 }
 
 fn print_identify(r: &identify::Report) {
+    use ui::Tone::{Bad, Dim, Good, Warn};
     let applied = if r.dry_run { "would-apply" } else { "applied" };
-    ui::info(&format!(
-        "identified {} of {} · {applied} {} · low-score {} · skipped-tagged {} · no-match {} · failed {}",
-        r.matched, r.total, r.applied, r.skipped_low_score, r.skipped_tagged, r.no_match, r.failed
-    ));
+    let metrics = [
+        ui::metric("matched", format!("{}/{}", r.matched, r.total), if r.matched > 0 { Good } else { Dim }),
+        ui::tally(applied, r.applied, Good),
+        ui::tally("low-score", r.skipped_low_score, Warn),
+        ui::tally("skipped-tagged", r.skipped_tagged, Dim),
+        ui::tally("no-match", r.no_match, Dim),
+        ui::tally("failed", r.failed, Bad),
+    ];
+    let mut hints = Vec::new();
+    if r.matched > r.applied && !r.dry_run && r.applied == 0 && r.skipped_low_score == 0 {
+        hints.push("matches found — re-run with `--apply` to write them".to_string());
+    }
+    if r.skipped_low_score > 0 {
+        hints.push("some matches were below the score gate — lower `--min-score` only if you trust them".to_string());
+    }
+    ui::result("identify", r.dry_run, &metrics, &hints);
+    if ui::is_quiet() {
+        return;
+    }
     for fr in &r.results {
         if let Some(m) = &fr.matched {
             println!(
@@ -556,6 +612,7 @@ fn main() -> Result<()> {
         std::process::exit(0);
     });
     let cli = Cli::parse();
+    ui::set_verbosity(if cli.quiet { 0 } else if cli.verbose { 2 } else { 1 });
     let json = cli.json;
     match cli.cmd {
         Cmd::Download { urls, out, cookies, work_dir, keep_work, bitrate, jobs, storefront, fallback, no_convert } => {
@@ -587,10 +644,25 @@ fn main() -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
-                ui::ok(&format!(
-                    "converted {} · copied {} · skipped {} · failed {} · {} with cover · {} lrc",
-                    r.converted, r.copied, r.skipped, r.failed, r.with_cover, r.lrc_copied
-                ));
+                use ui::Tone::{Bad, Dim, Good};
+                let done = r.converted + r.copied;
+                let mut hints = Vec::new();
+                if r.failed > 0 {
+                    hints.push("some files failed — `amdl doctor --source … --deep` to see which".to_string());
+                }
+                ui::result(
+                    &format!("convert · {} of {} → Opus", done, done + r.skipped + r.failed),
+                    false,
+                    &[
+                        ui::tally("converted", r.converted, Good),
+                        ui::tally("copied", r.copied, Good),
+                        ui::tally("with-cover", r.with_cover, Good),
+                        ui::tally("lrc", r.lrc_copied, Good),
+                        ui::tally("skipped", r.skipped, Dim),
+                        ui::tally("failed", r.failed, Bad),
+                    ],
+                    &hints,
+                );
             }
             Ok(())
         }
@@ -646,10 +718,20 @@ fn main() -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
-                ui::ok(&format!(
-                    "synced {} · plain {} · not-found {} · instrumental {} · no-meta {} · skipped {}",
-                    r.ok_synced, r.ok_plain, r.not_found, r.instrumental, r.no_meta, r.skipped
-                ));
+                use ui::Tone::{Dim, Good};
+                ui::result(
+                    &format!("lyrics · {} written", r.ok_synced + r.ok_plain),
+                    false,
+                    &[
+                        ui::tally("synced", r.ok_synced, Good),
+                        ui::tally("plain", r.ok_plain, Good),
+                        ui::tally("not-found", r.not_found, Dim),
+                        ui::tally("instrumental", r.instrumental, Dim),
+                        ui::tally("no-meta", r.no_meta, Dim),
+                        ui::tally("skipped", r.skipped, Dim),
+                    ],
+                    &[],
+                );
             }
             Ok(())
         }

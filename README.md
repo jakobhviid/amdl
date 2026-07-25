@@ -120,7 +120,9 @@ amdl <command> [options]
 `--json` (global) makes every batch command emit a machine-readable report
 for scripting. Common flags: `--bitrate 192k`, `-j/--jobs`, `-o/--out`,
 `--cookies`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,
-`--no-convert`. Also `--version`, `--help`, shell completions, a man page
+`--no-convert`, and `-q/--quiet` (headline only) / `-v/--verbose` (per-item
+detail). Result summaries are severity-colored — a failure never hides in a green
+line — and carry next-step hints. Also `--version`, `--help`, shell completions, a man page
 (`man amdl`), and **`--llm`** — a documentation flag (like `--help`) that dumps a
 single machine-readable guide (commands + workflows + repo link) for an LLM/agent.
 Every `--help` and the man page also carry the repo URL so an agent can inspect
