@@ -109,12 +109,15 @@ amdl <command> [options]
 | `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl. Recovered tracks are **regrouped** to their album siblings (so they don't split out under Apple's own album tag). `--dry-run`. |
 | `dedup [output]` | **Surface** (never delete) redundant tracks: exact-duplicate recordings + subset editions (Standard ⊂ Deluxe), with paths to remove and which copy to keep. `--print-rm` emits `rm` lines for you to review. |
 | `cookies` | Report which login cookies amdl would use, no download. |
+| `llm` | Print a full **LLM-readable guide** to stdout — every command + the end-to-end workflows + the repo link — so an agent can drive amdl from zero. |
 
 `--json` (global) makes every batch command emit a machine-readable report
 for scripting. Common flags: `--bitrate 192k`, `-j/--jobs`, `-o/--out`,
 `--cookies`, `--storefront dk`, `--fallback us,gb`, `--work-dir`, `--keep-work`,
-`--no-convert`. Also `--version`, `--help`, shell completions, and a man page per
-command (`man amdl`, `man amdl-convert` where installed).
+`--no-convert`. Also `--version`, `--help`, shell completions, a man page
+(`man amdl`), and **`amdl llm`** — a single machine-readable dump (commands +
+workflows + repo link) for an LLM/agent. Every `--help` and the man page also
+carry the repo URL so an agent can inspect the source.
 
 ## Typical use
 

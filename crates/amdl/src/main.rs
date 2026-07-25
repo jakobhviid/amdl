@@ -6,8 +6,14 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 
+const REPO_URL: &str = "https://github.com/jakobhviid/amdl";
+const AFTER_HELP: &str = concat!(
+    "Repository: https://github.com/jakobhviid/amdl (inspect the source there if needed)\n",
+    "LLM guide: run `amdl llm` for a full machine-readable reference (every command + the workflows)."
+);
+
 #[derive(Parser)]
-#[command(name = "amdl", version, about = "Music-library harness: validate, transcode to Opus, and keep your library consistent (wraps gamdl + ffmpeg).", arg_required_else_help = true)]
+#[command(name = "amdl", version, about = "Music-library harness: validate, transcode to Opus, and keep your library consistent (wraps gamdl + ffmpeg).", after_help = AFTER_HELP, after_long_help = AFTER_HELP, arg_required_else_help = true)]
 struct Cli {
     /// Emit machine-readable JSON instead of the human summary (composable).
     #[arg(long, global = true)]
@@ -177,6 +183,10 @@ enum Cmd {
     },
     /// Check login cookies: report gamdl's file and auto-detect from your browser.
     Cookies,
+    /// Print a full LLM-readable guide to stdout: every command + the end-to-end
+    /// workflows + a link to the source repo. Same content as the man page, laid
+    /// out plainly for an LLM/agent to read and drive the tool from zero.
+    Llm,
     /// Print a shell completion script (bash|zsh|fish|…) to stdout.
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -314,6 +324,34 @@ fn print_recover(r: &recover::Report) {
     } else if r.broken > 0 {
         ui::ok("all recovered");
     }
+}
+
+/// A single self-contained, plain-text guide an LLM/agent can read to drive amdl
+/// from zero: the full command reference (rendered from clap) followed by the
+/// end-to-end workflows, plus the repo link for source inspection.
+fn llm_guide() -> String {
+    let mut cmd = Cli::command();
+    let mut out = String::new();
+    out.push_str(&format!("amdl {} — LLM guide\n", env!("CARGO_PKG_VERSION")));
+    out.push_str(&format!("Repository: {REPO_URL}  (read the source there if you need behavior details)\n"));
+    out.push_str("This is the same reference as `man amdl`, laid out plainly for LLM reading.\n\n");
+
+    out.push_str("================================ COMMAND REFERENCE ================================\n\n");
+    out.push_str(&cmd.render_long_help().to_string());
+    for sub in cmd.get_subcommands_mut() {
+        if sub.is_hide_set() {
+            continue;
+        }
+        out.push_str(&format!("\n\n-------------------------------- amdl {} --------------------------------\n\n", sub.get_name()));
+        out.push_str(&sub.render_long_help().to_string());
+    }
+
+    out.push_str("\n\n================================ WORKFLOWS ================================\n\n");
+    out.push_str(include_str!("../../../WORKFLOWS.md"));
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 fn print_dedup(r: &dedup::Report) {
@@ -647,6 +685,10 @@ fn main() -> Result<()> {
         }
         Cmd::Man => {
             clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
+            Ok(())
+        }
+        Cmd::Llm => {
+            print!("{}", llm_guide());
             Ok(())
         }
     }
