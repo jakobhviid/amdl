@@ -40,8 +40,9 @@ jobs:
           fetch-depth: 0
       - name: Stamp version (so `amdl --version` matches the release)
         run: |
-          base=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([0-9]+\.[0-9]+).*/\1/')
-          v="${base}.$(git rev-list --count HEAD)"
+          # Version = Conventional-Commit semver from history (never bump by hand):
+          #   feat: -> minor | fix:/other -> patch | type!: breaking -> major (baseline 1.0.0)
+          v=$(git log --reverse --format='%H%x09%s' | awk -F'\t' 'BEGIN{maj=1;min=0;pat=0}{s=$2;if(s~/^[A-Za-z]+(\([^)]*\))?!:/){maj++;min=0;pat=0}else if(s~/^feat(\([^)]*\))?:/){min++;pat=0}else{pat++}}END{print maj"."min"."pat}')
           tmp=$(mktemp)
           sed -E "s/^version = \"[^\"]*\"/version = \"$v\"/" Cargo.toml > "$tmp" && mv "$tmp" Cargo.toml
           echo "stamped $v"
@@ -85,8 +86,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          base=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([0-9]+\.[0-9]+).*/\1/')
-          VERSION="${base}.$(git rev-list --count HEAD)"
+          # Same Conventional-Commit semver as the stamp step (kept in sync).
+          VERSION=$(git log --reverse --format='%H%x09%s' | awk -F'\t' 'BEGIN{maj=1;min=0;pat=0}{s=$2;if(s~/^[A-Za-z]+(\([^)]*\))?!:/){maj++;min=0;pat=0}else if(s~/^feat(\([^)]*\))?:/){min++;pat=0}else{pat++}}END{print maj"."min"."pat}')
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           # Repackage the prebuilt x86_64 Linux binary as a Homebrew bottle so
           # `brew install` POURS it (no build-from-source, no C compiler gate).
