@@ -12,8 +12,9 @@ and every batch command can emit machine-readable **`--json`**, so scripts and
 agents can chain steps and decide between them. Config is optional — a lazy
 `~/.config/amdl/config.toml` only holds durable defaults (see `amdl config`).
 Source directories are treated as **read-only input**; everything is written to
-the **output** directory. See **[WORKFLOWS.md](WORKFLOWS.md)** for end-to-end
-recipes (build a library, health-scan, repair truncation).
+the **output** directory, and every mutating run is journaled so `amdl undo` can
+revert it. See **[WORKFLOWS.md](WORKFLOWS.md)** for end-to-end recipes (build a
+library, health-scan, covers, identify, recover, de-dup, undo).
 
 **LLM/agent-friendly.** amdl is built to be driven by an LLM as much as a human:
 every batch command takes `--json`, and **`amdl --llm`** (a documentation flag,
@@ -137,11 +138,14 @@ amdl convert ~/Music/originals ~/Music/lib # m4a/mp3 → Opus (covers, lyrics, j
 amdl doctor ~/Music/lib --source ~/Music/originals   # what still needs fixing
 amdl doctor ~/Music/lib --json | jq '.truncated'     # feed a script/agent
 amdl download 'https://music.apple.com/dk/album/…' -o ~/Music/lib   # acquire + convert
+amdl undo                                            # reverted a run? undo it
 ```
 
-Repair a truncated Opus (silent-disconnect damage): `doctor` finds it → delete
-the bad `.opus` → re-run `convert` (skip-existing regenerates only the deleted
-one). Full recipes in **[WORKFLOWS.md](WORKFLOWS.md)**.
+Every mutating run is journaled, so `amdl undo` reverts the last one (and never
+clobbers edits you made since). Repair a truncated Opus (silent-disconnect
+damage): `doctor` finds it → delete the bad `.opus` → re-run `convert`
+(skip-existing regenerates only the deleted one). Full recipes in
+**[WORKFLOWS.md](WORKFLOWS.md)**.
 
 ## Status
 

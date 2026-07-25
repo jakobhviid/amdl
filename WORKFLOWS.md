@@ -13,12 +13,15 @@ takes `--json`, so a step's output can be inspected and fed to the next.
 - Set defaults once so you can omit paths: `amdl config --init`, then edit
   `~/.config/amdl/config.toml` (`[paths] source=… output=…`). Flags always
   override config.
-- `--json` on `convert`/`doctor`/`config` prints structured results; pipe to `jq`.
+- `--json` on **every** batch command prints structured results; pipe to `jq`.
+- Every mutating run is **journaled** so `amdl undo` can revert it (W8) — a safety
+  net if a step goes wrong.
 
 ## Convention for agents
 
 Prefer this loop: **act → `doctor --json` → decide from the counts → act again.**
 `doctor` is the map; it never changes anything, so it's safe to call repeatedly.
+If a mutating step turns out wrong, `amdl undo` reverts the last run (W8).
 
 ---
 
@@ -32,7 +35,7 @@ re-running costs nothing for already-converted files.
 ```sh
 amdl convert /music/originals /music/lib          # explicit paths
 amdl convert                                       # uses config [paths]
-amdl convert /music/originals /music/lib --json    # {converted, skipped, failed, with_cover, lrc_copied}
+amdl convert /music/originals /music/lib --json    # {converted, copied, skipped, failed, with_cover, lrc_copied}
 ```
 
 Convert and `lyrics` (below) touch different outputs (`.opus` vs `.lrc`) and are
@@ -70,7 +73,7 @@ amdl tag <path> --compilation --dry-run                          # preview
 
 Applies to every audio file under the path; existing tags are preserved.
 
-*Resumability (W9):* if a run dies mid-way, just run the same command again —
+*Resumability:* if a run dies mid-way, just run the same command again —
 finished files are skipped. The one trap this creates — a half-written `.opus`
 that *looks* done — is caught by `doctor` (W3).
 
@@ -239,6 +242,33 @@ whose tracks are a strict subset of another edition of the same release, e.g.
 Standard ⊂ Deluxe; multi-disc sets are safe — their discs are disjoint). The
 subset tier is heuristic and labelled as such; review before removing anything.
 
+## W8 — Undo a run (`undo`)
+
+Every mutating command is **journaled by default**, so you can revert it. Undo
+deletes files amdl created (convert/lyrics/recover) and restores tags/covers it
+changed (tag/identify/covers/paste/regroup).
+
+```sh
+amdl undo                 # revert the most recent mutating run
+amdl undo --list          # recent runs: id · #changes · command
+amdl undo <run-id>        # revert a specific run
+amdl undo --dry-run       # preview what would be reverted
+<any mutating cmd> --no-undo   # don't journal this run
+```
+
+**It never clobbers your later edits.** Before reverting each change, undo checks
+the file still matches what amdl *left*; anything you (or another tool) touched
+since is skipped and reported, not forced. So `undo` is safe even if you've been
+working in the library between the run and the undo.
+
+The journal lives in your OS state dir (`~/.local/state/amdl/undo` on Linux,
+`~/Library/Application Support/amdl/undo` on macOS; override with `$AMDL_UNDO_DIR`)
+and persists across reboots. It's compact — creations store a path+hash, edits
+store just the old tag values (and the old cover only when one is *replaced*) —
+and the last runs are kept, older ones pruned automatically.
+
+---
+
 ## Semantics — matching, exit codes, concurrency (read before scripting)
 
 The behavior below is stable and worth knowing up front, so an agent can predict
@@ -310,28 +340,3 @@ Likewise, *serving* the finished library is your media server's job: point
 Navidrome (or whatever) at the **output** Opus tree (never the read-only source)
 and let it scan — amdl deliberately stays a self-contained file harness and does
 not reach across the network into a server it doesn't own.
-
-## W8 — Undo a run (`undo`)
-
-Every mutating command is **journaled by default**, so you can revert it. Undo
-deletes files amdl created (convert/lyrics/recover) and restores tags/covers it
-changed (tag/identify/covers/paste/regroup).
-
-```sh
-amdl undo                 # revert the most recent mutating run
-amdl undo --list          # recent runs: id · #changes · command
-amdl undo <run-id>        # revert a specific run
-amdl undo --dry-run       # preview what would be reverted
-<any mutating cmd> --no-undo   # don't journal this run
-```
-
-**It never clobbers your later edits.** Before reverting each change, undo checks
-the file still matches what amdl *left*; anything you (or another tool) touched
-since is skipped and reported, not forced. So `undo` is safe even if you've been
-working in the library between the run and the undo.
-
-The journal lives in your OS state dir (`~/.local/state/amdl/undo` on Linux,
-`~/Library/Application Support/amdl/undo` on macOS; override with `$AMDL_UNDO_DIR`)
-and persists across reboots. It's compact — creations store a path+hash, edits
-store just the old tag values (and the old cover only when one is *replaced*) —
-and the last runs are kept, older ones pruned automatically.
