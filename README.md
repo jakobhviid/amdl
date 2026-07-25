@@ -148,6 +148,11 @@ is intentionally out of scope — that's your media server's job (Navidrome, say
 auto-scans its library), and amdl stays a self-contained *file* harness.
 See [WORKFLOWS.md](WORKFLOWS.md).
 
+## AI disclosure
+
+Parts of this codebase were written with the assistance of AI coding agents
+(Claude Code, opencode, and others). All changes were reviewed by the maintainer.
+
 ## License
 
 MIT
