@@ -149,11 +149,15 @@ pub fn bar(len: u64, msg: &str) -> ProgressBar {
         return ProgressBar::hidden();
     }
     let pb = mp().add(ProgressBar::new(len));
+    // Show time passed and estimated time left, kept easy to tell apart: elapsed
+    // is dimmed ("gone"), the ETA is green and prefixed "~…left" ("to go").
     pb.set_style(
-        ProgressStyle::with_template("  {spinner:.cyan} {msg} {pos}/{len} [{bar:24.cyan/blue}] {elapsed}")
-            .unwrap()
-            .progress_chars("=>-")
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+        ProgressStyle::with_template(
+            "  {spinner:.cyan} {msg} {pos}/{len} [{bar:24.cyan/blue}] {elapsed:.dim} elapsed · ~{eta:.green} left",
+        )
+        .unwrap()
+        .progress_chars("=>-")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(Duration::from_millis(90));

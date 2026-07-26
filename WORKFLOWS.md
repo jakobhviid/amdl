@@ -105,6 +105,16 @@ amdl lyrics /music/lib --force-embed             # overwrite even a synced embed
 amdl undo                                        # revert an embed run (restores the prior tag)
 ```
 
+**Target one track, not the whole library.** The `lyrics` path argument accepts a
+**single audio file** as well as a directory (same as `tag`/`identify`), so a
+person or an agent can fix exactly one track without walking the library — the
+lyrics analogue of a one-file cover fix:
+
+```sh
+amdl lyrics "/music/lib/Artist/Album/03 Song.opus"                # just this track
+amdl lyrics "/music/lib/Artist/Album/03 Song.opus" --force-embed   # re-embed this track's tag, even if synced
+```
+
 Serving from **Navidrome** (or similar) reads either form off the output tree, so
 embedding is about portability, not your server — sidecars alone already serve.
 
