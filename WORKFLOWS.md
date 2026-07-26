@@ -189,6 +189,23 @@ amdl lyrics /music/lib --no-align          # ...but skip the Generated-tier alig
 amdl lyrics /music/lib --embed             # align (default) and embed the results too
 ```
 
+**Instrumentals & wrong matches.** `lyrics` guards against the classic bad
+auto-match (a vocal lyric landing on an instrumental/score/cover). It skips
+tracks whose title explicitly says `(Instrumental)`/`(Instrumental Version)` and
+any a source flags instrumental, stamping a durable `AMDL_INSTRUMENTAL` tag so
+they're never re-queried; fuzzy fallback matches are accepted only if the
+candidate's duration (±5s) or album actually matches the file; and placeholder
+bodies (`Instrumental`, one-word stubs) are rejected. For the residual case —
+an instrumental whose lyrics are simply *wrong at the source* (a vocal lyric
+uploaded against the correct recording's own metadata, which no check can
+catch) — mark it by hand; it strips the wrong lyrics and skips it thereafter:
+
+```sh
+amdl lyrics "/music/lib/Artist/Instrumental Album" --mark-instrumental   # strip lyrics + mark a whole album
+amdl lyrics "/music/lib/…/05 Some Cover.opus" --mark-instrumental         # ...or one track
+amdl lyrics "/music/lib/…/05 Some Cover.opus" --unmark-instrumental       # undo the mark (undo restores lyrics)
+```
+
 ### tag — compilation grouping
 
 A Various-Artists album whose track artists differ (or are blank) scatters in the

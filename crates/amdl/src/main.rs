@@ -168,6 +168,17 @@ enum Cmd {
         /// is configured; this opts out of it (still fetches + upgrades).
         #[arg(long)]
         no_align: bool,
+        /// Mark the target (a file or a whole album dir) as **instrumental**:
+        /// strip any lyrics it has (the .lrc sidecar and the embedded LYRICS tag)
+        /// and stamp AMDL_INSTRUMENTAL so `lyrics` skips it forever. For fixing a
+        /// wrong lyric that no automatic check catches. Journaled (`undo` restores
+        /// the lyrics). No fetching happens on this run.
+        #[arg(long, conflicts_with = "unmark_instrumental")]
+        mark_instrumental: bool,
+        /// Clear a previously-set AMDL_INSTRUMENTAL mark on the target (does not
+        /// restore stripped lyrics — re-run `lyrics` for that, or `undo`).
+        #[arg(long)]
+        unmark_instrumental: bool,
     },
     /// Identify tracks by sound (AcoustID fingerprint) to fix untagged/mis-tagged
     /// files. Needs [keys] acoustid (or $ACOUSTID_KEY). --apply writes the match.
@@ -1046,11 +1057,22 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, no_align } => {
+        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, no_align, mark_instrumental, unmark_instrumental } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
+            // Manual instrumental (un)marking is a self-contained repair: no fetch.
+            if mark_instrumental || unmark_instrumental {
+                let n = lyrics::mark_instrumental(&output, unmark_instrumental);
+                let verb = if unmark_instrumental { "un-marked" } else { "marked instrumental (lyrics stripped)" };
+                if json {
+                    println!("{}", serde_json::json!({ "action": if unmark_instrumental {"unmark"} else {"mark"}, "files": n }));
+                } else {
+                    ui::ok(&format!("{verb}: {n} file(s)"));
+                }
+                return Ok(());
+            }
             // Alignment runs automatically once [lyrics] aligner_url is configured;
             // --no-align opts out. With no aligner configured it simply doesn't run.
             let aligner_url = cfg.lyrics.aligner_url.clone();

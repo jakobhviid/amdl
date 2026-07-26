@@ -64,6 +64,40 @@ pub fn read_basic(path: &Path) -> Basic {
     }
 }
 
+/// Strip any embedded `LYRICS` tag AND stamp `AMDL_INSTRUMENTAL=1`, in a single
+/// save — the "this track shouldn't have lyrics" repair. Preserves every other
+/// tag. Caller journals it (and separately removes any `.lrc` sidecar).
+pub fn strip_lyrics_and_mark(path: &Path) -> Result<()> {
+    let mut tagged = Probe::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read()?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::VorbisComments));
+    }
+    let tag = tagged.primary_tag_mut().expect("tag present");
+    tag.retain(|item| !matches!(item.key(), ItemKey::Lyrics));
+    tag.insert_unchecked(TagItem::new(ItemKey::Unknown(INSTRUMENTAL_KEY.to_string()), ItemValue::Text("1".into())));
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("strip lyrics + mark {}", path.display()))?;
+    Ok(())
+}
+
+/// Remove amdl's `AMDL_INSTRUMENTAL` marker from a file, preserving everything
+/// else. For undoing a mistaken mark (a track that does have lyrics).
+pub fn clear_instrumental_mark(path: &Path) -> Result<()> {
+    let mut tagged = Probe::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read()?;
+    if let Some(tag) = tagged.primary_tag_mut() {
+        tag.retain(|item| !matches!(item.key(), ItemKey::Unknown(k) if k == INSTRUMENTAL_KEY));
+    }
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("clear instrumental mark on {}", path.display()))?;
+    Ok(())
+}
+
 /// Whether a tag carries amdl's `AMDL_INSTRUMENTAL=1` marker.
 fn is_instrumental_mark(tag: &Tag) -> bool {
     tag.get_string(&ItemKey::Unknown(INSTRUMENTAL_KEY.to_string()))

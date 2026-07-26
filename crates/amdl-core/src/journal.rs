@@ -52,6 +52,10 @@ enum Entry {
     /// synced); undo rewrites the old bytes (stored under `objects/` as `before`)
     /// if the file still hashes to `after`.
     RestoreBytes { path: PathBuf, before: String, after: String },
+    /// A file amdl deleted (e.g. a wrong `.lrc` stripped when marking a track
+    /// instrumental); undo re-creates it from the backed-up bytes if nothing is
+    /// there now.
+    Removed { path: PathBuf, before: String },
 }
 
 impl Entry {
@@ -59,7 +63,8 @@ impl Entry {
         match self {
             Entry::Create { path, .. }
             | Entry::Restore { path, .. }
-            | Entry::RestoreBytes { path, .. } => path,
+            | Entry::RestoreBytes { path, .. }
+            | Entry::Removed { path, .. } => path,
         }
     }
 }
@@ -74,6 +79,10 @@ struct Snapshot {
     compilation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lyrics: Option<String>,
+    /// amdl's `AMDL_INSTRUMENTAL` marker value before the edit (so undo can put
+    /// the mark back — or remove one the edit added).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instrumental: Option<String>,
     /// blake3 of the old front-cover bytes (stored under `objects/`), or None if
     /// the file had no cover before the edit.
     picture: Option<String>,
@@ -117,6 +126,23 @@ pub fn replaced(path: &Path, before: &[u8]) {
     }
 }
 
+/// Record that `path` is being deleted, backing up its bytes so undo re-creates
+/// it. Call BEFORE removing the file. For small non-audio files (e.g. an `.lrc`
+/// stripped when marking a track instrumental). Best-effort.
+pub fn removed(path: &Path) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let before = hash_bytes(&bytes);
+    if store_object(&before, &bytes).is_err() {
+        return;
+    }
+    push(Entry::Removed { path: abs(path), before });
+}
+
 /// Wrap an in-place edit of `path`: snapshot its tags first, run `f`, then record
 /// the inverse. A no-op (just runs `f`) when journaling is off. Snapshot/record
 /// failures are swallowed — undo is best-effort and must never break the command.
@@ -136,6 +162,7 @@ pub fn edit<T, E>(path: &Path, f: impl FnOnce() -> std::result::Result<T, E>) ->
                 Some(Entry::Create { hash, .. }) => *hash = after,
                 Some(Entry::Restore { after: a, .. })
                 | Some(Entry::RestoreBytes { after: a, .. }) => *a = after,
+                Some(Entry::Removed { .. }) => {} // a re-created-then-edited path; leave the removal
                 None => {
                     if let Some(before) = before {
                         j.entries.push(Entry::Restore { path: ap, before, after });
@@ -299,6 +326,18 @@ fn revert(e: &Entry, dry_run: bool) -> Result<bool> {
             }
             Ok(true)
         }
+        Entry::Removed { path, before } => {
+            if path.exists() {
+                return Ok(false); // something's there now — don't clobber it
+            }
+            if !dry_run {
+                if let Some(p) = path.parent() {
+                    std::fs::create_dir_all(p).ok();
+                }
+                std::fs::write(path, read_object(before)?)?;
+            }
+            Ok(true)
+        }
     }
 }
 
@@ -314,6 +353,7 @@ fn snapshot(path: &Path) -> Result<Snapshot> {
         s.album_artist = tag.get_string(&ItemKey::AlbumArtist).map(str::to_string);
         s.compilation = tag.get_string(&ItemKey::FlagCompilation).map(str::to_string);
         s.lyrics = tag.get_string(&ItemKey::Lyrics).map(str::to_string);
+        s.instrumental = tag.get_string(&ItemKey::Unknown(crate::tags::INSTRUMENTAL_KEY.to_string())).map(str::to_string);
         let pics = tag.pictures();
         if let Some(pic) = pics.iter().find(|p| p.pic_type() == PictureType::CoverFront).or_else(|| pics.first()) {
             let hash = hash_bytes(pic.data());
@@ -337,6 +377,13 @@ fn restore(path: &Path, snap: &Snapshot) -> Result<()> {
     set_or_clear(tag, ItemKey::AlbumArtist, &snap.album_artist);
     set_or_clear(tag, ItemKey::FlagCompilation, &snap.compilation);
     set_or_clear(tag, ItemKey::Lyrics, &snap.lyrics);
+    // The instrumental marker is an `Unknown` key, which `insert` (via re_map)
+    // would drop — set it with `insert_unchecked`, clear it with `retain`.
+    let ikey = ItemKey::Unknown(crate::tags::INSTRUMENTAL_KEY.to_string());
+    match &snap.instrumental {
+        Some(v) => tag.insert_unchecked(TagItem::new(ikey, ItemValue::Text(v.clone()))),
+        None => tag.retain(|i| !matches!(i.key(), ItemKey::Unknown(k) if k == crate::tags::INSTRUMENTAL_KEY)),
+    }
     while !tag.pictures().is_empty() {
         tag.remove_picture(0);
     }
@@ -450,7 +497,7 @@ fn gc_objects() -> Result<()> {
                             referenced.insert(h.clone());
                         }
                     }
-                    Entry::RestoreBytes { before, .. } => {
+                    Entry::RestoreBytes { before, .. } | Entry::Removed { before, .. } => {
                         referenced.insert(before.clone());
                     }
                     Entry::Create { .. } => {}

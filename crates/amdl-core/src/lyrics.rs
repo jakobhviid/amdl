@@ -162,7 +162,7 @@ fn settle_sidecar(
         return (None, PreCount::None);
     }
     if b.title.as_deref().map(title_says_instrumental).unwrap_or(false) {
-        mark_instrumental(f);
+        stamp_instrumental(f);
         c.instrumental.fetch_add(1, Ordering::Relaxed);
         return (None, PreCount::None);
     }
@@ -206,7 +206,7 @@ fn settle_sidecar(
         Some(Fetched::Instrumental) => {
             // The source flags this recording instrumental — persist that as our
             // mark so we never re-query it, and never write a lyric to it.
-            mark_instrumental(f);
+            stamp_instrumental(f);
             c.instrumental.fetch_add(1, Ordering::Relaxed);
             (None, PreCount::None)
         }
@@ -231,10 +231,36 @@ fn settle_sidecar(
 
 /// Stamp the durable instrumental mark (journaled), surfacing any write error
 /// instead of silently dropping it — a failed mark means we'd re-query forever.
-fn mark_instrumental(f: &Path) {
+fn stamp_instrumental(f: &Path) {
     if let Err(e) = crate::journal::edit(f, || tags::set_instrumental_mark(f)) {
         ui::warn(&format!("could not mark {} instrumental: {e}", f.display()));
     }
+}
+
+/// Manually mark every audio file under `root` (a single file or a whole
+/// album/dir) instrumental — **stripping any wrong lyrics it already has** (the
+/// `.lrc` sidecar and the embedded `LYRICS` tag) and stamping
+/// `AMDL_INSTRUMENTAL`, so `lyrics` skips it forever. This is the escape hatch
+/// for instrumentals whose lyrics are mislabeled *at the source* (a vocal lyric
+/// uploaded against the correct instrumental recording's own metadata), which no
+/// automatic check can catch. `unmark` just clears the mark (it does not restore
+/// stripped lyrics — `undo` does that). Journaled. Returns the file count.
+pub fn mark_instrumental(root: &Path, unmark: bool) -> usize {
+    list_audio(root)
+        .iter()
+        .filter(|f| {
+            if unmark {
+                return crate::journal::edit(f, || tags::clear_instrumental_mark(f)).is_ok();
+            }
+            // Strip the sidecar (undo re-creates it) before touching tags.
+            let lrc = f.with_extension("lrc");
+            if lrc.exists() {
+                crate::journal::removed(&lrc);
+                let _ = std::fs::remove_file(&lrc);
+            }
+            crate::journal::edit(f, || tags::strip_lyrics_and_mark(f)).is_ok()
+        })
+        .count()
 }
 
 /// Fetch lyrics from already-read tags. `None` means the file lacks the
