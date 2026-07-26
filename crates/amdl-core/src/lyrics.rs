@@ -81,8 +81,8 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
             let (mut content, pre) = settle_sidecar(f, opts, &c, fallback);
             // Stage 1b: if we ended up with *plain* lyrics and no source had a
             // synced version, generate synced ones via the alignment service
-            // (Generated tier, marked). Only fires with `--align` + a configured
-            // aligner and when the text isn't already synced.
+            // (Generated tier, marked). Only fires when alignment is enabled
+            // (a configured aligner, not opted out) and the text isn't synced.
             if opts.align {
                 if let (Some(url), Some(text)) = (aligner_url, content.clone()) {
                     if !is_synced(text.as_bytes()) {
@@ -186,7 +186,7 @@ fn settle_sidecar(
             (None, PreCount::None)
         }
         // No sidecar and nothing from the network. Fall back to lyrics embedded
-        // in the file itself (the `LYRICS` tag) as the source — so `--align` can
+        // in the file itself (the `LYRICS` tag) as the source — so alignment can
         // time a track whose only lyrics live inside the file. `None` here = no
         // meta to even query with.
         other => {

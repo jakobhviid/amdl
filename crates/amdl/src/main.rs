@@ -162,15 +162,10 @@ enum Cmd {
         /// upgrade — including replacing an already-synced embed. Implies --embed.
         #[arg(long)]
         force_embed: bool,
-        /// Generate *synced* lyrics from plain ones by listening to the track,
-        /// for tracks no source has timed. **On by default when `[lyrics]
-        /// aligner_url` is set** (see the amdl-aligner project); this flag only
-        /// matters to request it when no aligner is configured (then it prints
-        /// setup instructions). Results are marked `[re:amdl-align]`, journaled.
-        #[arg(long)]
-        align: bool,
-        /// Don't run the alignment service even if `aligner_url` is configured
-        /// (skip the Generated-tier last resort; still fetches + upgrades).
+        /// Skip forced alignment. Alignment (generating *synced* lyrics from plain
+        /// ones by listening to the track, marked `[re:amdl-align]`) runs
+        /// automatically for the untimed residue whenever `[lyrics] aligner_url`
+        /// is configured; this opts out of it (still fetches + upgrades).
         #[arg(long)]
         no_align: bool,
     },
@@ -1010,22 +1005,15 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, align, no_align } => {
+        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, no_align } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
-            // Alignment is on by default once [lyrics] aligner_url is configured;
-            // --no-align opts out, --align requests it explicitly (and, if no
-            // aligner is set up, prints setup instructions and no-ops).
+            // Alignment runs automatically once [lyrics] aligner_url is configured;
+            // --no-align opts out. With no aligner configured it simply doesn't run.
             let aligner_url = cfg.lyrics.aligner_url.clone();
-            let want_align = !no_align && (align || aligner_url.is_some());
-            if align && aligner_url.is_none() {
-                ui::warn("--align needs an alignment service, but [lyrics] aligner_url is not set in your config.");
-                ui::info("  Run the service (a GPU box is recommended) and set aligner_url, e.g.:");
-                ui::info("    [lyrics]\n    aligner_url = \"http://192.168.1.6:8790\"");
-                ui::info("  Setup: https://github.com/jakobhviid/amdl-aligner  (proceeding without alignment)");
-            }
+            let want_align = !no_align && aligner_url.is_some();
             let opts = lyrics::Options {
                 upgrade_synced: !no_upgrade, // upgrade is the default; --no-upgrade opts out
                 embed: embed || force_embed, // --force-embed implies --embed

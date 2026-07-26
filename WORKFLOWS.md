@@ -173,9 +173,8 @@ and auto-upgraded later if a real synced version appears. Low-confidence
 alignments are dropped back to plain.
 
 **Alignment is on by default once `aligner_url` is set** — no flag needed. Use
-`--no-align` to skip it (fetch + upgrade only), or `--align` to request it
-explicitly (which, if no `aligner_url` is configured, prints setup instructions
-and proceeds without aligning).
+`--no-align` to skip it (fetch + upgrade only). With no `aligner_url` configured
+it simply doesn't run.
 
 ```toml
 [lyrics]
