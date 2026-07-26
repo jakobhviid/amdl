@@ -399,7 +399,11 @@ fn fetch_lrclib(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>
         return f;
     }
 
-    // Fallback: fuzzy search, take the first usable hit.
+    // Fallback: fuzzy search. Unlike `/api/get`, `/api/search` returns whatever
+    // ranks highest by *title* — which is how vocal originals landed on covers,
+    // and same-title different songs on generic score cues. So accept a hit ONLY
+    // if it actually matches this file (duration within tolerance, else album).
+    // Instrumental-flagged fuzzy hits are skipped, not trusted to mark the file.
     let search = crate::http::agent().get("https://lrclib.net/api/search")
         .set("User-Agent", UA)
         .query("track_name", title)
@@ -409,15 +413,55 @@ fn fetch_lrclib(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>
         if let Ok(text) = resp.into_string() {
             if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
                 for v in arr {
+                    if !candidate_matches(&v, album, dur) {
+                        continue;
+                    }
                     match classify(&v) {
-                        Fetched::NotFound => continue,
-                        other => return other,
+                        Fetched::Synced(s) => return Fetched::Synced(s),
+                        Fetched::Plain(s) => return Fetched::Plain(s),
+                        _ => continue, // NotFound / instrumental-flagged fuzzy hit
                     }
                 }
             }
         }
     }
     Fetched::NotFound
+}
+
+/// Tolerance (seconds) for matching a fallback lyric candidate's duration to the
+/// file's. Wide enough for DB rounding, tight enough to reject a different song.
+const DURATION_TOL: f64 = 5.0;
+
+/// Whether a fuzzy `/api/search` candidate actually belongs to this file. The
+/// strong signal is duration (a different recording differs by more than a few
+/// seconds); when the file has no duration, fall back to a normalized album
+/// match. With nothing to verify against, reject — an unverified fuzzy hit is
+/// exactly what produced the wrong-song/wrong-language matches.
+fn candidate_matches(v: &serde_json::Value, album: Option<&str>, dur: Option<u64>) -> bool {
+    if let (Some(fd), Some(cd)) = (dur, v.get("duration").and_then(|x| x.as_f64())) {
+        return (cd - fd as f64).abs() <= DURATION_TOL;
+    }
+    match (album, v.get("albumName").and_then(|x| x.as_str())) {
+        (Some(a), Some(ca)) => norm_meta(a) == norm_meta(ca),
+        _ => false,
+    }
+}
+
+/// Loose normalization for comparing album/title text: lowercase, collapse to
+/// alphanumerics-and-spaces. Good enough to see through punctuation/case noise.
+fn norm_meta(s: &str) -> String {
+    let mut out = String::new();
+    let mut prev_space = false;
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+            prev_space = false;
+        } else if !prev_space {
+            out.push(' ');
+            prev_space = true;
+        }
+    }
+    out.trim().to_string()
 }
 
 /// LrcApi (HisAtri/LrcApi): `GET {url}/jsonapi?title=&artist=&album=`, the key in
@@ -601,7 +645,7 @@ fn fmt_ts(sec: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{best_of, is_synced, parse_lrcapi, should_embed, title_says_instrumental, Fetched};
+    use super::{best_of, candidate_matches, is_synced, parse_lrcapi, should_embed, title_says_instrumental, Fetched};
 
     #[test]
     fn lrcapi_parse_prefers_synced_then_plain() {
@@ -683,6 +727,25 @@ mod tests {
         assert!(!is_synced(b"[ar:Rick Astley]\n[length:03:33]\nplain words here"));
         // A leading bracket with no digit-then-colon is not a timestamp.
         assert!(!is_synced(b"[chorus]\nwords"));
+    }
+
+    #[test]
+    fn fallback_candidate_needs_duration_or_album_match() {
+        use serde_json::json;
+        // Duration within tolerance → accept (right recording).
+        assert!(candidate_matches(&json!({"duration": 217.0}), Some("any"), Some(219)));
+        // Duration far off → reject even though the title matched upstream (the
+        // wrong-song / wrong-language failure mode).
+        assert!(!candidate_matches(&json!({"duration": 258.0}), None, Some(219)));
+        // No file duration → require a normalized album match.
+        assert!(candidate_matches(
+            &json!({"albumName": "Goodbye Lullaby (Expanded Edition)"}),
+            Some("goodbye lullaby - expanded edition"),
+            None,
+        ));
+        assert!(!candidate_matches(&json!({"albumName": "What The Hell"}), Some("Goodbye Lullaby"), None));
+        // Nothing to verify against → reject (an unverified fuzzy hit is the bug).
+        assert!(!candidate_matches(&json!({"plainLyrics": "words"}), None, None));
     }
 
     #[test]
