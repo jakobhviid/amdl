@@ -47,7 +47,7 @@ enum Entry {
     /// A file amdl created; undo deletes it if it still hashes to `hash`.
     Create { path: PathBuf, hash: String },
     /// A file amdl edited in place; undo restores `before` if it still hashes to `after`.
-    Restore { path: PathBuf, before: Snapshot, after: String },
+    Restore { path: PathBuf, before: Box<Snapshot>, after: String },
     /// A non-audio file amdl overwrote wholesale (e.g. an `.lrc` upgraded to
     /// synced); undo rewrites the old bytes (stored under `objects/` as `before`)
     /// if the file still hashes to `after`.
@@ -70,23 +70,39 @@ impl Entry {
 }
 
 /// The tag state of a file *before* an in-place edit — enough to put it back.
+///
+/// New snapshots are **generic** (`generic = true`): `items` captures *every*
+/// text tag verbatim as `(format-field-name, value)`, so undo restores the whole
+/// tag block regardless of which fields a command touched — no per-field
+/// allowlist to keep in sync. The legacy fields below are only read when
+/// deserializing a manifest written by a pre-generic build.
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct Snapshot {
+    #[serde(default)]
+    generic: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    items: Vec<(String, String)>,
+    /// blake3 of the old front-cover bytes (stored under `objects/`), or None if
+    /// the file had no cover before the edit. Used by both formats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    picture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    picture_mime: Option<String>,
+    // ── legacy allowlist fields (manifests from pre-generic builds) ──
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     album: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     album_artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     compilation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lyrics: Option<String>,
-    /// amdl's `AMDL_INSTRUMENTAL` marker value before the edit (so undo can put
-    /// the mark back — or remove one the edit added).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instrumental: Option<String>,
-    /// blake3 of the old front-cover bytes (stored under `objects/`), or None if
-    /// the file had no cover before the edit.
-    picture: Option<String>,
-    picture_mime: Option<String>,
 }
 
 // ── recording (called by the mutating commands) ──────────────────────────────
@@ -165,7 +181,7 @@ pub fn edit<T, E>(path: &Path, f: impl FnOnce() -> std::result::Result<T, E>) ->
                 Some(Entry::Removed { .. }) => {} // a re-created-then-edited path; leave the removal
                 None => {
                     if let Some(before) = before {
-                        j.entries.push(Entry::Restore { path: ap, before, after });
+                        j.entries.push(Entry::Restore { path: ap, before: Box::new(before), after });
                     }
                 }
             }
@@ -345,15 +361,17 @@ fn revert(e: &Entry, dry_run: bool) -> Result<bool> {
 
 fn snapshot(path: &Path) -> Result<Snapshot> {
     let tagged = Probe::open(path)?.read()?;
-    let mut s = Snapshot::default();
+    let mut s = Snapshot { generic: true, ..Default::default() };
     if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
-        s.title = tag.title().map(|c| c.into_owned());
-        s.artist = tag.artist().map(|c| c.into_owned());
-        s.album = tag.album().map(|c| c.into_owned());
-        s.album_artist = tag.get_string(&ItemKey::AlbumArtist).map(str::to_string);
-        s.compilation = tag.get_string(&ItemKey::FlagCompilation).map(str::to_string);
-        s.lyrics = tag.get_string(&ItemKey::Lyrics).map(str::to_string);
-        s.instrumental = tag.get_string(&ItemKey::Unknown(crate::tags::INSTRUMENTAL_KEY.to_string())).map(str::to_string);
+        let tt = tag.tag_type();
+        // Every text item, verbatim, as (format field name, value). Non-text
+        // (binary) items are rare in audio metadata and are covered by the
+        // picture backup below.
+        for item in tag.items() {
+            if let (Some(k), Some(v)) = (item.key().map_key(tt, true), item.value().text()) {
+                s.items.push((k.to_string(), v.to_string()));
+            }
+        }
         let pics = tag.pictures();
         if let Some(pic) = pics.iter().find(|p| p.pic_type() == PictureType::CoverFront).or_else(|| pics.first()) {
             let hash = hash_bytes(pic.data());
@@ -371,19 +389,30 @@ fn restore(path: &Path, snap: &Snapshot) -> Result<()> {
         tagged.insert_tag(Tag::new(TagType::VorbisComments));
     }
     let tag = tagged.primary_tag_mut().expect("tag present");
-    match &snap.title { Some(v) => tag.set_title(v.clone()), None => { tag.remove_title(); } }
-    match &snap.artist { Some(v) => tag.set_artist(v.clone()), None => { tag.remove_artist(); } }
-    match &snap.album { Some(v) => tag.set_album(v.clone()), None => { tag.remove_album(); } }
-    set_or_clear(tag, ItemKey::AlbumArtist, &snap.album_artist);
-    set_or_clear(tag, ItemKey::FlagCompilation, &snap.compilation);
-    set_or_clear(tag, ItemKey::Lyrics, &snap.lyrics);
-    // The instrumental marker is an `Unknown` key, which `insert` (via re_map)
-    // would drop — set it with `insert_unchecked`, clear it with `retain`.
-    let ikey = ItemKey::Unknown(crate::tags::INSTRUMENTAL_KEY.to_string());
-    match &snap.instrumental {
-        Some(v) => tag.insert_unchecked(TagItem::new(ikey, ItemValue::Text(v.clone()))),
-        None => tag.retain(|i| !matches!(i.key(), ItemKey::Unknown(k) if k == crate::tags::INSTRUMENTAL_KEY)),
+
+    if snap.generic {
+        // Rewrite the whole tag to exactly the snapshot: clear every item, then
+        // re-insert each captured field. `insert_unchecked` because `Unknown`
+        // keys (e.g. AMDL_INSTRUMENTAL) would be dropped by `insert`'s re_map.
+        let tt = tag.tag_type();
+        tag.retain(|_| false);
+        for (k, v) in &snap.items {
+            tag.insert_unchecked(TagItem::new(ItemKey::from_key(tt, k), ItemValue::Text(v.clone())));
+        }
+    } else {
+        // Legacy allowlist restore (manifests from pre-generic builds).
+        match &snap.title { Some(v) => tag.set_title(v.clone()), None => { tag.remove_title(); } }
+        match &snap.artist { Some(v) => tag.set_artist(v.clone()), None => { tag.remove_artist(); } }
+        match &snap.album { Some(v) => tag.set_album(v.clone()), None => { tag.remove_album(); } }
+        set_or_clear(tag, ItemKey::AlbumArtist, &snap.album_artist);
+        set_or_clear(tag, ItemKey::FlagCompilation, &snap.compilation);
+        set_or_clear(tag, ItemKey::Lyrics, &snap.lyrics);
+        match &snap.instrumental {
+            Some(v) => tag.insert_unchecked(TagItem::new(ItemKey::Unknown(crate::tags::INSTRUMENTAL_KEY.to_string()), ItemValue::Text(v.clone()))),
+            None => tag.retain(|i| !matches!(i.key(), ItemKey::Unknown(k) if k == crate::tags::INSTRUMENTAL_KEY)),
+        }
     }
+
     while !tag.pictures().is_empty() {
         tag.remove_picture(0);
     }
