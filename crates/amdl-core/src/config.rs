@@ -53,6 +53,11 @@ pub struct Lyrics {
     /// is consulted first.
     #[serde(default)]
     pub lrcapi_first: bool,
+    /// Optional forced-alignment service (amdl-aligner) URL, e.g.
+    /// "http://192.168.1.6:8790". Enables `lyrics --align` to generate *synced* lyrics
+    /// from plain ones by listening to the track. Left unset, `--align` just
+    /// prints setup instructions. See github.com/jakobhviid/amdl-aligner.
+    pub aligner_url: Option<String>,
 }
 
 /// Path to the config file (honours `$XDG_CONFIG_HOME`).
@@ -111,4 +116,10 @@ pub const EXAMPLE: &str = "\
 # Flip priority to query the LrcApi server first and fall back to lrclib.net.
 # Default is lrclib.net first. (A synced match still beats a plain one either way.)
 # lrcapi_first = false
+#
+# Optional forced-alignment service for `lyrics --align`: generates *synced*
+# lyrics from plain ones by listening to the track, when no source has timed
+# lyrics. Run the service yourself (GPU recommended) and point at it here.
+# See https://github.com/jakobhviid/amdl-aligner
+# aligner_url = \"http://192.168.1.6:8790\"
 ";

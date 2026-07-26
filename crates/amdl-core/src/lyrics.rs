@@ -31,6 +31,9 @@ pub struct Report {
     /// Tracks whose lyrics were (re)written into the audio file's `LYRICS` tag
     /// (only counted when `embed` is on).
     pub embedded: usize,
+    /// Plain `.lrc` files turned into synced by the alignment service (Generated
+    /// tier; only counted when `align` is on).
+    pub aligned: usize,
     pub not_found: usize,
     pub instrumental: usize,
     pub no_meta: usize,
@@ -47,6 +50,10 @@ pub struct Options {
     /// When embedding, overwrite even if it isn't an upgrade — including
     /// replacing an already-*synced* embed. Off = never downgrade / never churn.
     pub force_embed: bool,
+    /// Generate *synced* lyrics from plain ones via the forced-alignment service
+    /// (config `[lyrics] aligner_url`) when no source has timed lyrics. Results
+    /// are marked `[re:amdl-align]` (the "Generated" tier).
+    pub align: bool,
 }
 
 enum Fetched {
@@ -56,7 +63,7 @@ enum Fetched {
     NotFound,
 }
 
-pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fallback>) -> Report {
+pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fallback>, aligner_url: Option<&str>) -> Report {
     let files = list_audio(output);
     if files.is_empty() {
         return Report::default();
@@ -70,8 +77,25 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
     pool.install(|| {
         files.par_iter().for_each(|f| {
             // Stage 1: settle the sidecar (skip / fetch / upgrade), and hand back
-            // its resulting lyric text so stage 2 can embed it.
-            let content = settle_sidecar(f, opts, &c, fallback);
+            // its resulting lyric text so later stages can use it.
+            let mut content = settle_sidecar(f, opts, &c, fallback);
+            // Stage 1b: if we ended up with *plain* lyrics and no source had a
+            // synced version, generate synced ones via the alignment service
+            // (Generated tier, marked). Only fires with `--align` + a configured
+            // aligner and when the text isn't already synced.
+            if opts.align {
+                if let (Some(url), Some(text)) = (aligner_url, content.clone()) {
+                    if !is_synced(text.as_bytes()) {
+                        if let Some(gen) = align_track(url, f, &text) {
+                            let lrc = f.with_extension("lrc");
+                            if upgrade_lrc(&lrc, text.as_bytes(), &gen) {
+                                c.aligned.fetch_add(1, Ordering::Relaxed);
+                                content = Some(gen);
+                            }
+                        }
+                    }
+                }
+            }
             // Stage 2: optionally embed that text into the audio file's tags,
             // honoring the never-downgrade rule.
             if opts.embed {
@@ -366,6 +390,7 @@ struct Counters {
     ok_plain: AtomicUsize,
     upgraded: AtomicUsize,
     embedded: AtomicUsize,
+    aligned: AtomicUsize,
     not_found: AtomicUsize,
     instrumental: AtomicUsize,
     no_meta: AtomicUsize,
@@ -378,6 +403,7 @@ impl Counters {
             ok_plain: self.ok_plain.into_inner(),
             upgraded: self.upgraded.into_inner(),
             embedded: self.embedded.into_inner(),
+            aligned: self.aligned.into_inner(),
             not_found: self.not_found.into_inner(),
             instrumental: self.instrumental.into_inner(),
             no_meta: self.no_meta.into_inner(),
@@ -414,6 +440,65 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             }
         }
     }
+}
+
+/// Minimum overall confidence to accept an aligned result — below this, leave
+/// the track plain (a wrong sync is worse than none).
+const ALIGN_MIN_CONF: f64 = 0.5;
+
+/// POST the audio + plain lyric lines to the amdl-aligner service and assemble a
+/// synced `.lrc` (marked `[re:amdl-align]` = Generated tier) from the returned
+/// per-line timings. `None` if the service errors or confidence is too low.
+fn align_track(url: &str, audio_path: &Path, plain: &str) -> Option<String> {
+    let audio = std::fs::read(audio_path).ok()?;
+    let filename = audio_path.file_name()?.to_string_lossy().to_string();
+    let boundary = "amdlaligner7c3f9b2boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(&audio);
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"lyrics\"\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(plain.as_bytes());
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    // Alignment is slow (seconds on GPU, longer on CPU) — allow a generous read.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(600))
+        .build();
+    let resp = agent
+        .post(&format!("{}/align", url.trim_end_matches('/')))
+        .set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+        .send_bytes(&body)
+        .ok()?;
+    let text = resp.into_string().ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let conf = v.get("overall_conf").and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let lines = v.get("lines")?.as_array()?;
+    if conf < ALIGN_MIN_CONF || lines.is_empty() {
+        return None;
+    }
+    let mut rows: Vec<(f64, String)> = lines
+        .iter()
+        .filter_map(|l| Some((l.get("start")?.as_f64()?, l.get("text")?.as_str()?.to_string())))
+        .collect();
+    rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out = String::from("[re:amdl-align]\n");
+    for (start, text) in rows {
+        out.push_str(&format!("[{}]{}\n", fmt_ts(start), text));
+    }
+    Some(out)
+}
+
+/// Seconds → LRC timestamp `mm:ss.xx`.
+fn fmt_ts(sec: f64) -> String {
+    let s = sec.max(0.0);
+    let m = (s / 60.0) as u64;
+    format!("{:02}:{:05.2}", m, s - (m as f64) * 60.0)
 }
 
 #[cfg(test)]

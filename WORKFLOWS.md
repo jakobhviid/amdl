@@ -57,7 +57,7 @@ so it's safe when the source is read-only.
 
 ```sh
 amdl lyrics /music/lib             # fetch missing + upgrade plain→synced (default)
-amdl lyrics /music/lib --json      # {ok_synced, ok_plain, upgraded, embedded, not_found, instrumental, no_meta, skipped}
+amdl lyrics /music/lib --json      # {ok_synced, ok_plain, upgraded, aligned, embedded, not_found, instrumental, no_meta, skipped}
 ```
 
 A large `not_found` count is normal for niche/Danish catalogs — not a failure.
@@ -136,6 +136,25 @@ Both `lrcapi_url` and `lrcapi_key` are required to enable it; `lrcapi_first` (de
 `false`) flips which source is primary/queried-first. This applies to plain
 `lyrics` (default), `--no-upgrade`, and `--embed` alike — they all fetch through the same
 source chain.
+
+**Generate synced lyrics for tracks no source has (`--align`).** As a last resort,
+`--align` produces *synced* lyrics from *plain* ones by listening to the track
+(forced alignment) — for the residue that neither lrclib nor your LrcApi has
+timed. It needs a running [amdl-aligner](https://github.com/jakobhviid/amdl-aligner)
+service (GPU recommended) set as `[lyrics] aligner_url`; without it, `--align`
+just prints setup instructions. Results are written at the **Generated** tier —
+marked `[re:amdl-align]` so they're recognizable as machine-made, lower quality
+than a real synced source (~0.7 s onset accuracy), and auto-upgraded later if a
+real synced version appears. Low-confidence alignments are dropped back to plain.
+
+```toml
+[lyrics]
+aligner_url = "http://192.168.1.6:8790"    # your amdl-aligner service (LAN)
+```
+```sh
+amdl lyrics /music/lib --align             # generate synced for the plain/untimed residue
+amdl lyrics /music/lib --align --embed      # ...and embed the results too
+```
 
 ### tag — compilation grouping
 

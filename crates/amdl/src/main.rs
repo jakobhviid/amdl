@@ -155,6 +155,13 @@ enum Cmd {
         /// upgrade — including replacing an already-synced embed. Implies --embed.
         #[arg(long)]
         force_embed: bool,
+        /// Generate *synced* lyrics from plain ones by listening to the track,
+        /// for tracks no source has timed. Needs a running alignment service set
+        /// as `[lyrics] aligner_url` in config (see the amdl-aligner project);
+        /// without it, this just prints setup instructions. Results are marked
+        /// `[re:amdl-align]` and journaled for `undo`.
+        #[arg(long)]
+        align: bool,
     },
     /// Identify tracks by sound (AcoustID fingerprint) to fix untagged/mis-tagged
     /// files. Needs [keys] acoustid (or $ACOUSTID_KEY). --apply writes the match.
@@ -855,15 +862,25 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed } => {
+        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, align } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
+            // --align needs a configured alignment service; warn (and no-op the
+            // alignment) if it isn't set up, pointing at the setup docs.
+            let aligner_url = cfg.lyrics.aligner_url.clone();
+            if align && aligner_url.is_none() {
+                ui::warn("--align needs an alignment service, but [lyrics] aligner_url is not set in your config.");
+                ui::info("  Run the service (a GPU box is recommended) and set aligner_url, e.g.:");
+                ui::info("    [lyrics]\n    aligner_url = \"http://192.168.1.6:8790\"");
+                ui::info("  Setup: https://github.com/jakobhviid/amdl-aligner  (proceeding without alignment)");
+            }
             let opts = lyrics::Options {
                 upgrade_synced: !no_upgrade, // upgrade is the default; --no-upgrade opts out
                 embed: embed || force_embed, // --force-embed implies --embed
                 force_embed,
+                align,
             };
             // Optional LrcApi fallback from config (both url + key required).
             let fallback = match (&cfg.lyrics.lrcapi_url, &cfg.lyrics.lrcapi_key) {
@@ -877,7 +894,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 }
                 _ => None,
             };
-            let r = lyrics::backfill(&output, jobs, opts, fallback.as_ref());
+            let r = lyrics::backfill(&output, jobs, opts, fallback.as_ref(), aligner_url.as_deref());
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
@@ -889,6 +906,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                         ui::tally("synced", r.ok_synced, Good),
                         ui::tally("plain", r.ok_plain, Good),
                         ui::tally("upgraded", r.upgraded, Good),
+                        ui::tally("aligned", r.aligned, Good),
                         ui::tally("embedded", r.embedded, Good),
                         ui::tally("not-found", r.not_found, Dim),
                         ui::tally("instrumental", r.instrumental, Dim),
