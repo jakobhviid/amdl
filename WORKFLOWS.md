@@ -104,6 +104,25 @@ amdl undo                                         # revert an embed run (restore
 Serving from **Navidrome** (or similar) reads either form off the output tree, so
 embedding is about portability, not your server — sidecars alone already serve.
 
+**Secondary lyrics source (config).** `lyrics` uses lrclib.net by default. You can
+add a second, [LrcApi](https://github.com/HisAtri/LrcApi)-compatible server (e.g.
+self-hosted) in the config; it's consulted **only when lrclib.net has no synced
+match**, and a synced hit from *either* source always wins over a plain one — so a
+track lrclib only has untimed gets timed lyrics from your server. Set it under
+`[lyrics]` in `~/.config/amdl/config.toml`:
+
+```toml
+[lyrics]
+lrcapi_url  = "https://lyrics.example.cloud"   # LrcApi base URL (GET {url}/jsonapi)
+lrcapi_key  = "…"                               # sent verbatim as the Authorization header
+# lrcapi_first = true                           # flip priority: try this server before lrclib.net
+```
+
+Both `lrcapi_url` and `lrcapi_key` are required to enable it; `lrcapi_first` (default
+`false`) flips which source is primary/queried-first. This applies to plain
+`lyrics`, `--upgrade-synced`, and `--embed` alike — they all fetch through the same
+source chain.
+
 ### tag — compilation grouping
 
 A Various-Artists album whose track artists differ (or are blank) scatters in the

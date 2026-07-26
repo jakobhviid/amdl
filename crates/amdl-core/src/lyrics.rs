@@ -56,7 +56,7 @@ enum Fetched {
     NotFound,
 }
 
-pub fn backfill(output: &Path, jobs: usize, opts: Options) -> Report {
+pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fallback>) -> Report {
     let files = list_audio(output);
     if files.is_empty() {
         return Report::default();
@@ -71,7 +71,7 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options) -> Report {
         files.par_iter().for_each(|f| {
             // Stage 1: settle the sidecar (skip / fetch / upgrade), and hand back
             // its resulting lyric text so stage 2 can embed it.
-            let content = settle_sidecar(f, opts, &c);
+            let content = settle_sidecar(f, opts, &c, fallback);
             // Stage 2: optionally embed that text into the audio file's tags,
             // honoring the never-downgrade rule.
             if opts.embed {
@@ -91,14 +91,14 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options) -> Report {
 /// Ensure the sidecar `.lrc` is present/upgraded, tallying the outcome, and
 /// return the lyric text now on disk (for embedding), or `None` when there are
 /// no usable lyrics for this track.
-fn settle_sidecar(f: &Path, opts: Options, c: &Counters) -> Option<String> {
+fn settle_sidecar(f: &Path, opts: Options, c: &Counters, fallback: Option<&Fallback>) -> Option<String> {
     let lrc = f.with_extension("lrc");
     if lrc.exists() {
         // Existing sidecar: normally skip. With `upgrade_synced`, a *plain* .lrc
-        // is re-queried and replaced iff LRCLIB has a synced version.
+        // is re-queried and replaced iff a source has a synced version.
         let existing = std::fs::read(&lrc).unwrap_or_default();
         if opts.upgrade_synced && !is_synced(&existing) {
-            if let Some(Fetched::Synced(s)) = fetch_for(f) {
+            if let Some(Fetched::Synced(s)) = fetch_for(f, fallback) {
                 if upgrade_lrc(&lrc, &existing, &s) {
                     c.upgraded.fetch_add(1, Ordering::Relaxed);
                     return Some(s);
@@ -109,7 +109,7 @@ fn settle_sidecar(f: &Path, opts: Options, c: &Counters) -> Option<String> {
         c.skipped.fetch_add(1, Ordering::Relaxed);
         return String::from_utf8(existing).ok();
     }
-    let Some(fetched) = fetch_for(f) else {
+    let Some(fetched) = fetch_for(f, fallback) else {
         c.no_meta.fetch_add(1, Ordering::Relaxed);
         return None;
     };
@@ -137,12 +137,12 @@ fn settle_sidecar(f: &Path, opts: Options, c: &Counters) -> Option<String> {
     }
 }
 
-/// Read a file's basic tags and fetch LRCLIB lyrics for it. `None` means the
-/// file lacks the artist+title needed to query (the caller's `no_meta` case).
-fn fetch_for(f: &Path) -> Option<Fetched> {
+/// Read a file's basic tags and fetch lyrics for it. `None` means the file lacks
+/// the artist+title needed to query (the caller's `no_meta` case).
+fn fetch_for(f: &Path, fallback: Option<&Fallback>) -> Option<Fetched> {
     let b = tags::read_basic(f);
     let (artist, title) = (b.artist?, b.title?);
-    Some(fetch(&artist, &title, b.album.as_deref(), tags::duration_secs(f)))
+    Some(fetch(&artist, &title, b.album.as_deref(), tags::duration_secs(f), fallback))
 }
 
 /// True if the `.lrc` carries at least one `[mm:ss]` timestamp tag — i.e. it's
@@ -205,9 +205,64 @@ fn write_lrc(path: &Path, content: &str) -> bool {
     ok
 }
 
-/// LRCLIB: try the exact `get` (artist/title/album/duration), then fall back to
-/// `search`. Prefers synced lyrics; skips instrumentals.
-fn fetch(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>) -> Fetched {
+/// An LrcApi-compatible server (HisAtri/LrcApi): base URL + `Authorization` key.
+#[derive(Clone)]
+pub struct LrcApi {
+    pub url: String,
+    pub key: String,
+}
+
+/// The configured secondary source and how it's prioritized against lrclib.net.
+#[derive(Clone)]
+pub struct Fallback {
+    pub api: LrcApi,
+    /// Query the LrcApi server before lrclib.net (flip the default priority).
+    pub first: bool,
+}
+
+/// Fetch lyrics for a track from the two sources in priority order. The primary
+/// (lrclib.net by default, or the LrcApi server when `lrcapi_first`) is queried
+/// first; a *synced* hit there short-circuits. Otherwise the secondary is
+/// consulted and the better result wins — synced beats plain beats none, and the
+/// primary wins ties. With no `fallback` configured, only lrclib.net is used.
+fn fetch(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>, fallback: Option<&Fallback>) -> Fetched {
+    let Some(fb) = fallback else {
+        return fetch_lrclib(artist, title, album, dur);
+    };
+    let api = &fb.api;
+    let (primary, secondary): (Fetched, &dyn Fn() -> Fetched) = if fb.first {
+        (fetch_lrcapi(api, artist, title, album), &|| fetch_lrclib(artist, title, album, dur))
+    } else {
+        (fetch_lrclib(artist, title, album, dur), &|| fetch_lrcapi(api, artist, title, album))
+    };
+    if matches!(primary, Fetched::Synced(_)) {
+        return primary; // best possible from the primary — no need to consult the other
+    }
+    best_of(primary, secondary())
+}
+
+/// Rank a result so cross-source merges can prefer the richer one.
+fn rank(f: &Fetched) -> u8 {
+    match f {
+        Fetched::Synced(_) => 3,
+        Fetched::Plain(_) => 2,
+        Fetched::Instrumental => 1,
+        Fetched::NotFound => 0,
+    }
+}
+
+/// The better of two results; ties keep `a` (the primary/lrclib source).
+fn best_of(a: Fetched, b: Fetched) -> Fetched {
+    if rank(&b) > rank(&a) {
+        b
+    } else {
+        a
+    }
+}
+
+/// lrclib.net: try the exact `get` (artist/title/album/duration), then fall back
+/// to `search`. Prefers synced lyrics; reports instrumentals.
+fn fetch_lrclib(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>) -> Fetched {
     let mut req = ureq::get("https://lrclib.net/api/get")
         .set("User-Agent", UA)
         .query("artist_name", artist)
@@ -241,6 +296,45 @@ fn fetch(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>) -> Fe
         }
     }
     Fetched::NotFound
+}
+
+/// LrcApi (HisAtri/LrcApi): `GET {url}/jsonapi?title=&artist=&album=`, the key in
+/// the `Authorization` header. Returns a JSON array of candidates whose `lyrics`
+/// field is LRC text; take the first synced one, else the first non-empty plain.
+fn fetch_lrcapi(api: &LrcApi, artist: &str, title: &str, album: Option<&str>) -> Fetched {
+    let mut req = ureq::get(&format!("{}/jsonapi", api.url.trim_end_matches('/')))
+        .set("User-Agent", UA)
+        .set("Authorization", &api.key)
+        .query("title", title)
+        .query("artist", artist);
+    if let Some(al) = album {
+        req = req.query("album", al);
+    }
+    let Ok(resp) = req.call() else { return Fetched::NotFound };
+    let Ok(text) = resp.into_string() else { return Fetched::NotFound };
+    parse_lrcapi(&text)
+}
+
+/// Parse an LrcApi `/jsonapi` response body: a JSON array whose entries carry a
+/// `lyrics` field of LRC text. Return the first synced entry, else the first
+/// non-empty plain one, else NotFound.
+fn parse_lrcapi(body: &str) -> Fetched {
+    let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(body) else { return Fetched::NotFound };
+    let mut plain: Option<String> = None;
+    for v in &arr {
+        let Some(lrc) = v.get("lyrics").and_then(|x| x.as_str()) else { continue };
+        let lrc = lrc.trim();
+        if lrc.is_empty() {
+            continue;
+        }
+        if is_synced(lrc.as_bytes()) {
+            return Fetched::Synced(lrc.to_string());
+        }
+        if plain.is_none() {
+            plain = Some(lrc.to_string());
+        }
+    }
+    plain.map(Fetched::Plain).unwrap_or(Fetched::NotFound)
 }
 
 fn parse_one(resp: ureq::Response) -> Option<Fetched> {
@@ -314,7 +408,36 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_synced, should_embed};
+    use super::{best_of, is_synced, parse_lrcapi, should_embed, Fetched};
+
+    #[test]
+    fn lrcapi_parse_prefers_synced_then_plain() {
+        // synced entry wins even if a plain one comes first
+        let body = r#"[{"lyrics":"plain words\nno timing"},{"lyrics":"[00:01.00]hi\n[00:03.00]yo"}]"#;
+        assert!(matches!(parse_lrcapi(body), Fetched::Synced(_)));
+        // no synced anywhere → first non-empty plain
+        assert!(matches!(parse_lrcapi(r#"[{"lyrics":"just words"}]"#), Fetched::Plain(_)));
+        // empty / missing / malformed → NotFound
+        assert!(matches!(parse_lrcapi(r#"[]"#), Fetched::NotFound));
+        assert!(matches!(parse_lrcapi(r#"[{"lyrics":"   "}]"#), Fetched::NotFound));
+        assert!(matches!(parse_lrcapi("not json"), Fetched::NotFound));
+    }
+
+    #[test]
+    fn fallback_merge_prefers_synced_then_keeps_primary() {
+        // fallback's synced beats the primary's plain (the whole point of a fallback)
+        assert!(matches!(best_of(Fetched::Plain("p".into()), Fetched::Synced("s".into())), Fetched::Synced(_)));
+        // primary's synced is never displaced by a fallback plain
+        assert!(matches!(best_of(Fetched::Synced("s".into()), Fetched::Plain("p".into())), Fetched::Synced(_)));
+        // fallback fills a primary miss
+        assert!(matches!(best_of(Fetched::NotFound, Fetched::Plain("p".into())), Fetched::Plain(_)));
+        // primary is kept over a weaker/equal fallback (ties favor lrclib)
+        assert!(matches!(best_of(Fetched::Plain("p".into()), Fetched::NotFound), Fetched::Plain(_)));
+        match best_of(Fetched::Plain("A".into()), Fetched::Plain("B".into())) {
+            Fetched::Plain(s) => assert_eq!(s, "A", "tie keeps the primary source"),
+            _ => panic!("expected plain"),
+        }
+    }
 
     const PLAIN: &str = "just words\nno timing";
     const SYNCED: &str = "[00:01.00]timed line\n[00:04.00]second";

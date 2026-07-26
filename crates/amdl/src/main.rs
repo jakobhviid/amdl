@@ -857,7 +857,19 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 embed: embed || force_embed, // --force-embed implies --embed
                 force_embed,
             };
-            let r = lyrics::backfill(&output, jobs, opts);
+            // Optional LrcApi fallback from config (both url + key required).
+            let fallback = match (&cfg.lyrics.lrcapi_url, &cfg.lyrics.lrcapi_key) {
+                (Some(url), Some(key)) => Some(lyrics::Fallback {
+                    api: lyrics::LrcApi { url: url.clone(), key: key.clone() },
+                    first: cfg.lyrics.lrcapi_first,
+                }),
+                (Some(_), None) => {
+                    ui::warn("config [lyrics] lrcapi_url is set but lrcapi_key is missing — skipping the fallback server");
+                    None
+                }
+                _ => None,
+            };
+            let r = lyrics::backfill(&output, jobs, opts, fallback.as_ref());
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {

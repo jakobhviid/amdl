@@ -13,6 +13,8 @@ pub struct Config {
     pub convert: Convert,
     #[serde(default)]
     pub keys: Keys,
+    #[serde(default)]
+    pub lyrics: Lyrics,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -35,6 +37,22 @@ pub struct Keys {
     pub acoustid: Option<String>,
     /// Discogs personal token (optional), improves compilation cover coverage.
     pub discogs: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Lyrics {
+    /// Optional fallback lyrics server speaking the LrcApi protocol
+    /// (HisAtri/LrcApi): `GET {url}/jsonapi?title=&artist=&album=`. Consulted by
+    /// `lyrics` only when lrclib.net has no synced match. Needs `lrcapi_key`.
+    pub lrcapi_url: Option<String>,
+    /// API key for `lrcapi_url`, sent verbatim as the `Authorization` header.
+    pub lrcapi_key: Option<String>,
+    /// Flip the source priority: query the LrcApi server *first* and fall back to
+    /// lrclib.net. Default (false) keeps lrclib.net primary. Either way a synced
+    /// hit still beats a plain one; this only decides which source wins a tie and
+    /// is consulted first.
+    #[serde(default)]
+    pub lrcapi_first: bool,
 }
 
 /// Path to the config file (honours `$XDG_CONFIG_HOME`).
@@ -81,4 +99,16 @@ pub const EXAMPLE: &str = "\
 #   https://www.discogs.com/settings/developers
 # It's a ~40-char string, e.g.:
 # discogs = \"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcD\"
+
+[lyrics]
+# Optional fallback lyrics server, tried by `lyrics` only when lrclib.net has no
+# synced match — a synced hit from either source still wins. Must speak the
+# LrcApi protocol (https://github.com/HisAtri/LrcApi): GET {url}/jsonapi with
+# title/artist/album query params. The key is sent verbatim as the Authorization
+# header. Both fields are required to enable the fallback.
+# lrcapi_url = \"https://lyrics.example.cloud\"
+# lrcapi_key = \"your-api-key-here\"
+# Flip priority to query the LrcApi server first and fall back to lrclib.net.
+# Default is lrclib.net first. (A synced match still beats a plain one either way.)
+# lrcapi_first = false
 ";
