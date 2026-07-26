@@ -139,12 +139,7 @@ pub fn scan(output: &Path, source: Option<&Path>, deep: bool) -> Result<Health> 
 
     // Source files that never produced an Opus (conversion failures / damage).
     if let Some(src_root) = source {
-        let srcs = {
-            let mut v = Vec::new();
-            walk(src_root, &mut v);
-            v.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("m4a") | Some("mp3") | Some("flac")));
-            v
-        };
+        let srcs = crate::scan::with_exts(src_root, &["m4a", "mp3", "flac"]);
         for s in &srcs {
             if let Ok(rel) = s.strip_prefix(src_root) {
                 let expected = output.join(rel).with_extension("opus");
@@ -193,21 +188,5 @@ enum Finding {
 }
 
 fn list_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk(dir, &mut out);
-    out.retain(|p| p.extension().and_then(|e| e.to_str()) == Some(ext));
-    out.sort();
-    out
-}
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else {
-                out.push(p);
-            }
-        }
-    }
+    crate::scan::with_exts(dir, &[ext])
 }

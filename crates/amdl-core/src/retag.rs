@@ -99,26 +99,7 @@ fn apply(path: &Path, edit: &Edit) -> Result<()> {
 }
 
 fn list_audio(path: &Path) -> Vec<PathBuf> {
-    if path.is_file() {
-        return vec![path.to_path_buf()];
-    }
-    let mut out = Vec::new();
-    walk(path, &mut out);
-    out.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("opus") | Some("m4a") | Some("mp3")));
-    out.sort();
-    out
-}
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else {
-                out.push(p);
-            }
-        }
-    }
+    crate::scan::with_exts(path, &["opus", "m4a", "mp3"])
 }
 
 #[cfg(test)]

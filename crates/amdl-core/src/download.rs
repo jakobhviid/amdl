@@ -60,25 +60,9 @@ pub fn download(url: &str, opts: &Opts) -> Result<Vec<PathBuf>> {
 }
 
 fn list_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk(dir, &mut out);
-    out.retain(|p| p.extension().map(|e| e == ext).unwrap_or(false));
-    out.sort();
-    out
+    crate::scan::with_exts(dir, &[ext])
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else {
-                out.push(p);
-            }
-        }
-    }
-}
 
 fn which(bin: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {

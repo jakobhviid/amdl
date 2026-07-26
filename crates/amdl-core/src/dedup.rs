@@ -201,23 +201,7 @@ fn is_strict_subset(a: &HashSet<String>, b: &HashSet<String>) -> bool {
 }
 
 fn list_opus(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk(dir, &mut out);
-    out.retain(|p| p.extension().and_then(|e| e.to_str()) == Some("opus"));
-    out.sort();
-    out
-}
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else {
-                out.push(p);
-            }
-        }
-    }
+    crate::scan::with_exts(dir, &["opus"])
 }
 
 #[cfg(test)]

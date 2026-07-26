@@ -18,6 +18,7 @@ pub mod journal;
 pub mod lyrics;
 pub mod recover;
 pub mod retag;
+pub mod scan;
 pub mod stats;
 pub mod tags;
 pub mod ui;

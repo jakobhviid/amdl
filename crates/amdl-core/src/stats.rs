@@ -12,10 +12,6 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Extensions counted as audio tracks. Everything else in the tree (`.lrc`,
-/// artwork, playlists, …) is ignored.
-const AUDIO_EXTS: &[&str] = &["opus", "m4a", "mp3", "flac", "ogg", "oga", "aac", "wav", "aiff", "aif", "wma", "m4b", "alac"];
-
 /// A `name → count` pair; the JSON-friendly shape for every distribution.
 #[derive(Debug, Serialize)]
 pub struct Count {
@@ -362,29 +358,7 @@ pub fn collect(root: &Path) -> Stats {
 }
 
 fn list_audio(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk(root, &mut out);
-    out.retain(|p| {
-        p.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
-            .unwrap_or(false)
-    });
-    out.sort();
-    out
-}
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else {
-                out.push(p);
-            }
-        }
-    }
+    crate::scan::audio(root)
 }
 
 #[cfg(test)]

@@ -598,34 +598,11 @@ impl Counters {
     }
 }
 
-fn is_audio(p: &Path) -> bool {
-    matches!(p.extension().and_then(|e| e.to_str()), Some("opus") | Some("m4a") | Some("mp3"))
-}
-
 /// Collect audio files under `root`. `root` may be a **single audio file** (act
 /// on just it) or a **directory** (recurse) — same as `tag`/`identify`, so an
 /// agent can target one track (e.g. `lyrics song.opus --force-embed`).
 fn list_audio(root: &Path) -> Vec<PathBuf> {
-    if root.is_file() {
-        return if is_audio(root) { vec![root.to_path_buf()] } else { Vec::new() };
-    }
-    let mut out = Vec::new();
-    walk(root, &mut out);
-    out.retain(|p| is_audio(p));
-    out.sort();
-    out
-}
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else {
-                out.push(p);
-            }
-        }
-    }
+    crate::scan::with_exts(root, &["opus", "m4a", "mp3"])
 }
 
 /// Minimum overall confidence to accept an aligned result — below this, leave

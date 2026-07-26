@@ -171,25 +171,7 @@ fn mirror_lrc(inp: &Path, out: &Path) -> bool {
 }
 
 fn list_audio(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk(dir, &mut out);
-    out.retain(|p| {
-        matches!(p.extension().and_then(|e| e.to_str()), Some("m4a") | Some("mp3") | Some("opus"))
-    });
-    out.sort();
-    out
-}
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else {
-                out.push(p);
-            }
-        }
-    }
+    crate::scan::with_exts(dir, &["m4a", "mp3", "opus"])
 }
 fn which(bin: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
