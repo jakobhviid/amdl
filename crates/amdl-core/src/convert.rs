@@ -144,7 +144,16 @@ fn convert_one(inp: &Path, out: &Path, bitrate: &str) -> Result<Outcome> {
 
     // Fidelity pass: strip junk + re-embed the source cover as METADATA_BLOCK_PICTURE.
     let cover = tags::read_cover(inp);
-    let embedded = tags::finalize_opus(out, cover.as_ref()).unwrap_or(false);
+    let embedded = match tags::finalize_opus(out, cover.as_ref()) {
+        Ok(e) => e,
+        Err(e) => {
+            // Transcode succeeded but the tag/cover pass didn't — the .opus is
+            // playable but may keep iTunes junk or lack its cover. Say so rather
+            // than silently counting it a clean conversion.
+            ui::warn(&format!("tag finalize failed for {}: {e}", out.display()));
+            false
+        }
+    };
     Ok(Outcome { skipped: false, cover: embedded, lrc, copied: false })
 }
 
