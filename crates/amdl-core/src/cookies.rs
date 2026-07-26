@@ -3,7 +3,7 @@
 //!   1. --cookies <path> (must exist)
 //!   2. gamdl's own default (~/.gamdl/cookies.txt) — if not expired
 //!   3. auto-extract Apple Music cookies from an installed browser
-//!      (Chrome, Chromium, Firefox, Brave, Vivaldi)
+//!      (Chrome, Chromium, Firefox, Brave, Brave Origin, Vivaldi)
 //!   4. if the existing/extracted cookies look expired, or none are found,
 //!      warn the user to log in at music.apple.com and retry.
 //!
@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
-const BROWSER_LIST: &str = "Safari, Chrome, Firefox, Brave, Edge, Arc, or Vivaldi";
+const BROWSER_LIST: &str = "Safari, Chrome, Firefox, Brave, Brave Origin, Edge, Arc, or Vivaldi";
 #[cfg(not(target_os = "macos"))]
-const BROWSER_LIST: &str = "Chrome, Chromium, Firefox, Brave, Vivaldi, Edge, or Arc";
+const BROWSER_LIST: &str = "Chrome, Chromium, Firefox, Brave, Brave Origin, Vivaldi, Edge, or Arc";
 
 pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
     if !refresh {
@@ -260,6 +260,15 @@ fn extract_from_browser() -> Option<(String, String, usize)> {
     // Safari is macOS-only (its API is cfg'd to macos in rookie).
     #[cfg(target_os = "macos")]
     tries.push(("Safari", rookie::safari(domains.clone())));
+    // "Brave Origin" is a standalone Brave build whose profile lives in
+    // ~/.config/BraveSoftware/Brave-Origin — a *sibling* of Brave-Browser, not a
+    // channel suffix of it — so rookie::brave() never looks there. Feed each of its
+    // profile DBs to rookie by path; the on-disk format and keyring key match Brave.
+    for db in brave_origin_cookie_dbs() {
+        if let Some(p) = db.to_str() {
+            tries.push(("Brave Origin", rookie::any_browser(p, domains.clone(), None)));
+        }
+    }
     for (name, res) in tries {
         if let Ok(cookies) = res {
             if !cookies.is_empty() {
@@ -268,6 +277,35 @@ fn extract_from_browser() -> Option<(String, String, usize)> {
         }
     }
     None
+}
+
+/// Candidate Cookies-DB paths for "Brave Origin" — the standalone Brave build
+/// rookie has no config for. Covers the native and Flatpak locations, and the
+/// Default plus any numbered profiles. Only paths that exist are returned.
+fn brave_origin_cookie_dbs() -> Vec<PathBuf> {
+    let bases = [
+        home().join(".config/BraveSoftware/Brave-Origin"),
+        home().join(".var/app/com.brave.Browser/config/BraveSoftware/Brave-Origin"),
+    ];
+    let mut out = Vec::new();
+    for base in bases {
+        let default = base.join("Default/Cookies");
+        if default.is_file() {
+            out.push(default);
+        }
+        // Extra profiles are directories named "Profile 1", "Profile 2", …
+        if let Ok(entries) = fs::read_dir(&base) {
+            for e in entries.flatten() {
+                if e.file_name().to_string_lossy().starts_with("Profile ") {
+                    let db = e.path().join("Cookies");
+                    if db.is_file() {
+                        out.push(db);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 fn to_netscape(cookies: &[rookie::enums::Cookie]) -> String {
