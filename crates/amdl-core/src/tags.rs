@@ -11,6 +11,12 @@ use lofty::probe::Probe;
 use lofty::tag::{ItemValue, Tag, TagItem, TagType};
 use std::path::Path;
 
+/// amdl's own tag marking a track as instrumental with high confidence, so
+/// `lyrics` skips it (no network, no re-scan) on every later run. A plain custom
+/// Vorbis comment (`AMDL_INSTRUMENTAL=1`); ignored by players, preserved by our
+/// junk-strip.
+pub const INSTRUMENTAL_KEY: &str = "AMDL_INSTRUMENTAL";
+
 /// Minimal, player-relevant tag view used by scan/covers/tag ops.
 #[derive(Debug, Default, Clone)]
 pub struct Basic {
@@ -19,6 +25,8 @@ pub struct Basic {
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub has_cover: bool,
+    /// Track carries amdl's `AMDL_INSTRUMENTAL` marker (see [`INSTRUMENTAL_KEY`]).
+    pub instrumental_marked: bool,
 }
 
 fn open(path: &Path) -> Option<lofty::file::TaggedFile> {
@@ -52,7 +60,36 @@ pub fn read_basic(path: &Path) -> Basic {
             .get_string(&ItemKey::AlbumArtist)
             .map(|s| s.to_string()),
         has_cover: !tag.pictures().is_empty(),
+        instrumental_marked: is_instrumental_mark(tag),
     }
+}
+
+/// Whether a tag carries amdl's `AMDL_INSTRUMENTAL=1` marker.
+fn is_instrumental_mark(tag: &Tag) -> bool {
+    tag.get_string(&ItemKey::Unknown(INSTRUMENTAL_KEY.to_string()))
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
+}
+
+/// Stamp `AMDL_INSTRUMENTAL=1` on a file (idempotent), preserving every other
+/// tag. Marks a track amdl has judged instrumental so future `lyrics` runs skip
+/// it. Callers should journal the write (see `journal::edit`).
+pub fn set_instrumental_mark(path: &Path) -> Result<()> {
+    let mut tagged = Probe::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read()?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::VorbisComments));
+    }
+    let tag = tagged.primary_tag_mut().expect("tag present");
+    // `insert` runs `re_map`, which rejects `ItemKey::Unknown` (no built-in
+    // mapping) and would silently drop the item; `insert_unchecked` stores it,
+    // and VorbisComments' save keeps it (the key passes lofty's `verify_key`).
+    tag.insert_unchecked(TagItem::new(ItemKey::Unknown(INSTRUMENTAL_KEY.to_string()), ItemValue::Text("1".into())));
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("save instrumental mark to {}", path.display()))?;
+    Ok(())
 }
 
 /// Track duration in whole seconds (from the decoded audio properties).

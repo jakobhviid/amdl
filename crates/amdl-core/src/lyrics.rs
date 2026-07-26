@@ -151,6 +151,22 @@ fn settle_sidecar(
     c: &Counters,
     fallback: Option<&Fallback>,
 ) -> (Option<String>, PreCount) {
+    let b = tags::read_basic(f);
+    // Instrumental short-circuit. A durable `AMDL_INSTRUMENTAL` mark, or an
+    // explicit "(Instrumental)" in the title, means no lyrics belong here: skip
+    // with no network at all. When we newly detect it from the title, stamp the
+    // mark so every later run skips instantly and never re-queries — the biggest
+    // source of wrong auto-matches was vocal lyrics landing on instrumentals.
+    if b.instrumental_marked {
+        c.instrumental.fetch_add(1, Ordering::Relaxed);
+        return (None, PreCount::None);
+    }
+    if b.title.as_deref().map(title_says_instrumental).unwrap_or(false) {
+        mark_instrumental(f);
+        c.instrumental.fetch_add(1, Ordering::Relaxed);
+        return (None, PreCount::None);
+    }
+    let dur = tags::duration_secs(f);
     let lrc = f.with_extension("lrc");
     if lrc.exists() {
         // Existing sidecar: normally skip. With `upgrade_synced`, a *plain* .lrc
@@ -163,7 +179,7 @@ fn settle_sidecar(
             return (None, PreCount::Skipped);
         };
         if opts.upgrade_synced && !is_synced(&existing) {
-            if let Some(Fetched::Synced(s)) = fetch_for(f, fallback) {
+            if let Some(Fetched::Synced(s)) = fetch_meta(&b, dur, fallback) {
                 if upgrade_lrc(&lrc, &existing, &s) {
                     c.upgraded.fetch_add(1, Ordering::Relaxed);
                     return (Some(s), PreCount::None);
@@ -174,7 +190,7 @@ fn settle_sidecar(
         c.skipped.fetch_add(1, Ordering::Relaxed);
         return (String::from_utf8(existing).ok(), PreCount::Skipped);
     }
-    match fetch_for(f, fallback) {
+    match fetch_meta(&b, dur, fallback) {
         Some(Fetched::Synced(s)) => {
             if write_lrc(&lrc, &s) {
                 c.ok_synced.fetch_add(1, Ordering::Relaxed);
@@ -188,6 +204,9 @@ fn settle_sidecar(
             (Some(s), PreCount::OkPlain)
         }
         Some(Fetched::Instrumental) => {
+            // The source flags this recording instrumental — persist that as our
+            // mark so we never re-query it, and never write a lyric to it.
+            mark_instrumental(f);
             c.instrumental.fetch_add(1, Ordering::Relaxed);
             (None, PreCount::None)
         }
@@ -210,12 +229,32 @@ fn settle_sidecar(
     }
 }
 
-/// Read a file's basic tags and fetch lyrics for it. `None` means the file lacks
-/// the artist+title needed to query (the caller's `no_meta` case).
-fn fetch_for(f: &Path, fallback: Option<&Fallback>) -> Option<Fetched> {
-    let b = tags::read_basic(f);
-    let (artist, title) = (b.artist?, b.title?);
-    Some(fetch(&artist, &title, b.album.as_deref(), tags::duration_secs(f), fallback))
+/// Stamp the durable instrumental mark (journaled), surfacing any write error
+/// instead of silently dropping it — a failed mark means we'd re-query forever.
+fn mark_instrumental(f: &Path) {
+    if let Err(e) = crate::journal::edit(f, || tags::set_instrumental_mark(f)) {
+        ui::warn(&format!("could not mark {} instrumental: {e}", f.display()));
+    }
+}
+
+/// Fetch lyrics from already-read tags. `None` means the file lacks the
+/// artist+title needed to query (the caller's `no_meta` case).
+fn fetch_meta(b: &tags::Basic, dur: Option<u64>, fallback: Option<&Fallback>) -> Option<Fetched> {
+    let (artist, title) = (b.artist.as_deref()?, b.title.as_deref()?);
+    Some(fetch(artist, title, b.album.as_deref(), dur, fallback))
+}
+
+/// High-confidence "this is an instrumental" from the track title alone: an
+/// explicit parenthesised/bracketed "(Instrumental)" / "(Instrumental Version)"
+/// or a trailing "- Instrumental". Deliberately does NOT treat vague markers
+/// (Intro / Interlude / Score) as instrumental — those frequently have vocals,
+/// and this decision is durable (it stamps the file), so it must be conservative.
+fn title_says_instrumental(title: &str) -> bool {
+    let t = title.to_ascii_lowercase();
+    t.contains("(instrumental")
+        || t.contains("[instrumental")
+        || t.ends_with("- instrumental")
+        || t.ends_with("- instrumental version")
 }
 
 /// True if the `.lrc` carries at least one `[mm:ss]` timestamp tag — i.e. it's
@@ -562,7 +601,7 @@ fn fmt_ts(sec: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{best_of, is_synced, parse_lrcapi, should_embed, Fetched};
+    use super::{best_of, is_synced, parse_lrcapi, should_embed, title_says_instrumental, Fetched};
 
     #[test]
     fn lrcapi_parse_prefers_synced_then_plain() {
@@ -644,5 +683,29 @@ mod tests {
         assert!(!is_synced(b"[ar:Rick Astley]\n[length:03:33]\nplain words here"));
         // A leading bracket with no digit-then-colon is not a timestamp.
         assert!(!is_synced(b"[chorus]\nwords"));
+    }
+
+    #[test]
+    fn title_instrumental_is_explicit_and_conservative() {
+        // Explicit markers → instrumental (the wrong-lyrics failure bucket).
+        for t in [
+            "What The Hell (Instrumental)",
+            "The Family Madrigal (Instrumental Version)",
+            "Wizards in Winter (Instrumental)",
+            "Some Song [Instrumental]",
+            "A Tune - Instrumental",
+        ] {
+            assert!(title_says_instrumental(t), "{t} should read as instrumental");
+        }
+        // Vague / unrelated markers must NOT — these can have vocals.
+        for t in [
+            "Intro",
+            "Waterline (intro)",
+            "Nest (Contains Instrumental Excerpt)",
+            "Instrumental Break Up", // a real vocal song title
+            "My Favourite Things",
+        ] {
+            assert!(!title_says_instrumental(t), "{t} must not read as instrumental");
+        }
     }
 }
