@@ -233,6 +233,23 @@ Reports (each is a list of relative paths in `--json`):
 
 An agent should scan first, then scope the work from these lists.
 
+**Overview vs. health.** `doctor` finds *problems*; `stats` answers *"what's in
+here and what shape is it in"* — a read-only census of the whole library:
+
+```sh
+amdl stats /music/lib          # human summary
+amdl stats /music/lib --json   # machine object (pipe to jq)
+```
+
+It reports track/artist/album counts, total size + playtime, and distributions
+for format, bitrate, sample rate and channels, plus cover + tag completeness and
+**lyrics state at every level**: the sidecar `.lrc` and the embedded `LYRICS`
+tag each split into `none / plain / generated / synced`, and an overall
+`coverage` of `timed / plain-only / none`. It scans every audio file (not just
+Opus), so it works on a source tree too. Nothing is written. Use it to answer
+"how many tracks still lack timed lyrics?" or "what bitrates am I storing?"
+before planning a pass.
+
 ---
 
 ## W3 — Repair truncated Opus

@@ -215,13 +215,23 @@ fn fetch_for(f: &Path, fallback: Option<&Fallback>) -> Option<Fetched> {
 /// True if the `.lrc` carries at least one `[mm:ss]` timestamp tag — i.e. it's
 /// synced. Metadata-only tags like `[ar:…]`/`[length:…]` start with a letter, so
 /// they don't count; a plain lyric file has no bracketed timestamps at all.
-fn is_synced(lrc: &[u8]) -> bool {
+pub fn is_synced(lrc: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(lrc) else { return false };
     text.lines().any(|line| {
         let Some(rest) = line.trim_start().strip_prefix('[') else { return false };
         let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
         digits > 0 && rest[digits..].starts_with(':')
     })
+}
+
+/// Marker line stamped on lyrics we generated ourselves via forced alignment —
+/// the "Generated" tier (between plain and a trusted external synced source). A
+/// standard LRC metadata line, so players ignore it while amdl can recognise it.
+pub const ALIGN_MARKER: &str = "[re:amdl-align]";
+
+/// Whether lyric text is one we generated (carries [`ALIGN_MARKER`]).
+pub fn is_generated(text: &str) -> bool {
+    text.contains(ALIGN_MARKER)
 }
 
 /// Overwrite an existing plain `.lrc` with synced content, backing up the old
@@ -530,7 +540,7 @@ fn align_track(url: &str, audio_path: &Path, plain: &str) -> Option<String> {
         .filter_map(|l| Some((l.get("start")?.as_f64()?, l.get("text")?.as_str()?.to_string())))
         .collect();
     rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut out = String::from("[re:amdl-align]\n");
+    let mut out = format!("{ALIGN_MARKER}\n");
     for (start, text) in rows {
         out.push_str(&format!("[{}]{}\n", fmt_ts(start), text));
     }

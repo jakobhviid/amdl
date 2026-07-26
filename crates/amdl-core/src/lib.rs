@@ -17,6 +17,7 @@ pub mod journal;
 pub mod lyrics;
 pub mod recover;
 pub mod retag;
+pub mod stats;
 pub mod tags;
 pub mod ui;
 pub mod validate;

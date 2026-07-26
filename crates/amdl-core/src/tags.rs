@@ -61,6 +61,46 @@ pub fn duration_secs(path: &Path) -> Option<u64> {
     Some(tagged.properties().duration().as_secs())
 }
 
+/// Everything `stats` needs from a file, read in a **single** lofty open (tags,
+/// cover presence, embedded lyrics, and audio properties). `None` = the file
+/// couldn't be probed (unreadable / unsupported).
+#[derive(Debug, Default, Clone)]
+pub struct Meta {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub has_cover: bool,
+    pub lyrics: Option<String>,
+    pub duration_secs: u64,
+    /// Audio bitrate in kbps (falls back to the container's overall bitrate).
+    pub bitrate_kbps: Option<u32>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u8>,
+}
+
+/// Probe a file once for the full [`Meta`] view. See [`Meta`].
+pub fn read_meta(path: &Path) -> Option<Meta> {
+    let tagged = open(path)?;
+    let props = tagged.properties();
+    let mut m = Meta {
+        duration_secs: props.duration().as_secs(),
+        bitrate_kbps: props.audio_bitrate().or_else(|| props.overall_bitrate()),
+        sample_rate: props.sample_rate(),
+        channels: props.channels(),
+        ..Default::default()
+    };
+    if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
+        m.title = tag.title().map(|s| s.to_string());
+        m.artist = tag.artist().map(|s| s.to_string());
+        m.album = tag.album().map(|s| s.to_string());
+        m.album_artist = tag.get_string(&ItemKey::AlbumArtist).map(|s| s.to_string());
+        m.has_cover = !tag.pictures().is_empty();
+        m.lyrics = tag.get_string(&ItemKey::Lyrics).map(|s| s.to_string());
+    }
+    Some(m)
+}
+
 pub fn has_cover(path: &Path) -> bool {
     open(path)
         .map(|t| t.tags().iter().any(|tag| !tag.pictures().is_empty()))

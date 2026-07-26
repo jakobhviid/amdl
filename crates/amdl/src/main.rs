@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, covers, dedup, doctor, download, identify, journal, lyrics, recover, retag, ui, validate};
+use amdl_core::{config, convert, cookies, covers, dedup, doctor, download, identify, journal, lyrics, recover, retag, stats, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -94,6 +94,13 @@ enum Cmd {
         /// probe misses — no source library needed. Slower (decodes all audio).
         #[arg(long)]
         deep: bool,
+    },
+    /// Library overview (read-only): formats, bitrate/sample-rate/channel spread,
+    /// cover + tag completeness, and lyrics state at every level (sidecar +
+    /// embedded, plain/generated/synced). Scans all audio, not just Opus. `--json`.
+    Stats {
+        /// Library to scan — any audio tree (default: config [paths] output).
+        library: Option<PathBuf>,
     },
     /// Backfill missing Opus cover art: copy from source, then cross-library
     /// (--reference). Prints a numbered straggler list for albums still uncovered.
@@ -377,6 +384,96 @@ fn cmd_download(
         ui::info(&format!("kept work dir: {}", work_dir.display()));
     }
     Ok(())
+}
+
+fn print_stats(s: &stats::Stats) {
+    use ui::Tone::{Bad, Good, Warn};
+    let dur = human_duration(s.total_duration_secs);
+    let size = human_bytes(s.total_bytes);
+    let metrics = [
+        ui::tally("tracks", s.tracks, Good),
+        ui::tally("artists", s.artists, Good),
+        ui::tally("albums", s.albums, Good),
+        ui::tally("no-cover", s.without_cover, Warn),
+        ui::tally("unreadable", s.unreadable, Bad),
+    ];
+    ui::result(&format!("stats · {} · {size} · {dur}", s.root), false, &metrics, &[]);
+    if ui::is_quiet() {
+        return;
+    }
+
+    let dist = |label: &str, items: &[stats::Count]| {
+        if items.is_empty() {
+            return;
+        }
+        println!("  {label}:");
+        for c in items {
+            println!("    {:<10} {}", c.name, c.count);
+        }
+    };
+
+    dist("formats", &s.formats);
+
+    println!("  bitrate (kbps):");
+    if s.bitrate_kbps.avg > 0 {
+        println!("    min {}  ·  avg {}  ·  max {}", s.bitrate_kbps.min, s.bitrate_kbps.avg, s.bitrate_kbps.max);
+    }
+    for c in &s.bitrate_kbps.distribution {
+        println!("    {:<10} {}", c.name, c.count);
+    }
+    if s.bitrate_kbps.unknown > 0 {
+        println!("    {:<10} {}", "unknown", s.bitrate_kbps.unknown);
+    }
+
+    dist("sample rate (Hz)", &s.sample_rates);
+    dist("channels", &s.channels);
+
+    println!("  cover art:");
+    println!("    {:<10} {}", "embedded", s.with_cover);
+    println!("    {:<10} {}", "missing", s.without_cover);
+
+    println!("  tags:");
+    println!("    {:<14} {}", "fully tagged", s.fully_tagged);
+    println!("    {:<14} {}", "missing title", s.missing_title);
+    println!("    {:<14} {}", "missing artist", s.missing_artist);
+    println!("    {:<14} {}", "missing album", s.missing_album);
+
+    let tier = |c: &stats::TierCounts| format!("none {}  plain {}  generated {}  synced {}", c.none, c.plain, c.generated, c.synced);
+    println!("  lyrics:");
+    println!("    sidecar   {}", tier(&s.lyrics.sidecar));
+    println!("    embedded  {}", tier(&s.lyrics.embedded));
+    println!(
+        "    coverage  timed {}  ·  plain-only {}  ·  none {}",
+        s.lyrics.timed_anywhere, s.lyrics.plain_only, s.lyrics.none_anywhere
+    );
+}
+
+/// Human-readable byte size (binary units), e.g. `12.3 GiB`.
+fn human_bytes(n: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
+}
+
+/// Human-readable duration, e.g. `12d 3h 4m` / `3h 4m` / `4m`.
+fn human_duration(secs: u64) -> String {
+    let (d, h, m) = (secs / 86_400, (secs % 86_400) / 3600, (secs % 3600) / 60);
+    if d > 0 {
+        format!("{d}d {h}h {m}m")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{m}m")
+    }
 }
 
 fn print_health(h: &doctor::Health) {
@@ -868,6 +965,19 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&h)?);
             } else {
                 print_health(&h);
+            }
+            Ok(())
+        }
+        Cmd::Stats { library } => {
+            let cfg = config::load();
+            let library = library
+                .or(cfg.paths.output)
+                .context("no library — pass a path or set [paths] output in ~/.config/amdl/config.toml")?;
+            let s = stats::collect(&library);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&s)?);
+            } else {
+                print_stats(&s);
             }
             Ok(())
         }
