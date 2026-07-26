@@ -10,6 +10,7 @@
 //! amdl never overwrites ~/.gamdl — extracted cookies go to its own cache and are
 //! passed to gamdl via --cookies-path.
 use crate::ui;
+use serde::Serialize;
 use anyhow::{anyhow, bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -182,37 +183,92 @@ fn clean_netscape(raw: &str) -> (String, usize, bool) {
 
 /// `amdl cookies`: report what we'd use and whether the browser extraction works.
 /// Does not download anything.
-pub fn diagnose() -> Result<()> {
+/// Machine-readable result of [`diagnose`] (the `--json` shape).
+#[derive(Debug, Default, Serialize)]
+pub struct Diagnosis {
+    /// `$AMDL_COOKIES` was set in the environment.
+    pub env_cookies_set: bool,
+    /// When `env_cookies_set`: whether it held usable apple.com cookies.
+    pub env_cookies_usable: Option<bool>,
+    /// gamdl's own cookies file path, if present.
+    pub gamdl_cookies: Option<String>,
+    /// `"valid"` / `"expired"` for the gamdl cookies, if present.
+    pub gamdl_state: Option<String>,
+    /// Browser apple.com cookies were extracted from, if any.
+    pub browser: Option<String>,
+    pub browser_cookie_count: Option<usize>,
+    /// Where the extracted cookies were cached.
+    pub browser_cache_path: Option<String>,
+    /// `"valid"` / `"expired"` for the extracted cookies.
+    pub browser_state: Option<String>,
+    /// Whether usable (non-expired) apple.com cookies are available anywhere.
+    pub usable_cookies_available: bool,
+}
+
+pub fn diagnose(json: bool) -> Result<()> {
+    let mut d = Diagnosis::default();
     if let Some(raw) = env_cookies() {
-        ui::info("$AMDL_COOKIES is set — validating its contents:");
+        d.env_cookies_set = true;
+        if !json {
+            ui::info("$AMDL_COOKIES is set — validating its contents:");
+        }
         match store_pasted(&raw)? {
-            Some(p) => ui::ok(&format!("  usable → {}", p.display())),
-            None => ui::warn("  no apple.com cookies in $AMDL_COOKIES"),
+            Some(p) => {
+                d.env_cookies_usable = Some(true);
+                if !json {
+                    ui::ok(&format!("  usable → {}", p.display()));
+                }
+            }
+            None => {
+                d.env_cookies_usable = Some(false);
+                if !json {
+                    ui::warn("  no apple.com cookies in $AMDL_COOKIES");
+                }
+            }
         }
     }
     let default = gamdl_default();
     if default.is_file() {
-        let state = if expired(&default) { "looks EXPIRED" } else { "looks valid" };
-        ui::info(&format!("gamdl cookies: {} ({state})", default.display()));
-    } else {
+        let exp = expired(&default);
+        d.gamdl_cookies = Some(default.display().to_string());
+        d.gamdl_state = Some(if exp { "expired" } else { "valid" }.into());
+        if !json {
+            ui::info(&format!("gamdl cookies: {} ({})", default.display(), if exp { "looks EXPIRED" } else { "looks valid" }));
+        }
+    } else if !json {
         ui::info("gamdl cookies: none");
     }
     match extract_from_browser() {
         Some((browser, netscape, n)) => {
             let out = write_cache(&netscape)?;
-            ui::ok(&format!("browser: {n} apple.com cookie(s) from {browser} → wrote {}", out.display()));
-            if expired(&out) {
-                ui::warn("  …but they look EXPIRED — log in again at https://music.apple.com");
-            } else {
-                ui::info("  extracted cookies look valid");
+            let exp = expired(&out);
+            d.browser = Some(browser.clone());
+            d.browser_cookie_count = Some(n);
+            d.browser_cache_path = Some(out.display().to_string());
+            d.browser_state = Some(if exp { "expired" } else { "valid" }.into());
+            if !json {
+                ui::ok(&format!("browser: {n} apple.com cookie(s) from {browser} → wrote {}", out.display()));
+                if exp {
+                    ui::warn("  …but they look EXPIRED — log in again at https://music.apple.com");
+                } else {
+                    ui::info("  extracted cookies look valid");
+                }
             }
         }
         None => {
-            ui::warn(&format!("browser: no apple.com cookies found in {BROWSER_LIST}"));
-            ui::warn("→ log in at https://music.apple.com in one of those browsers");
-            ui::info("  on a headless server: pipe a cookies file with `--cookies -`,");
-            ui::info("  or run `download` and paste it when prompted.");
+            if !json {
+                ui::warn(&format!("browser: no apple.com cookies found in {BROWSER_LIST}"));
+                ui::warn("→ log in at https://music.apple.com in one of those browsers");
+                ui::info("  on a headless server: pipe a cookies file with `--cookies -`,");
+                ui::info("  or run `download` and paste it when prompted.");
+            }
         }
+    }
+    d.usable_cookies_available = d.env_cookies_usable == Some(true)
+        || d.gamdl_state.as_deref() == Some("valid")
+        || d.browser_state.as_deref() == Some("valid");
+    if json {
+        println!("{}", serde_json::to_string_pretty(&d)?);
     }
     Ok(())
 }

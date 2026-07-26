@@ -1337,7 +1337,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Cookies => cookies::diagnose(),
+        Cmd::Cookies => cookies::diagnose(json),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "amdl", &mut std::io::stdout());
             Ok(())
