@@ -11,11 +11,34 @@ takes `--json`, so a step's output can be inspected and fed to the next.
 - **Output** = the *derived* library amdl produces and maintains (`.opus` +
   mirrored `.lrc`, player-visible covers). Everything is written here.
 - Set defaults once so you can omit paths: `amdl config --init`, then edit
-  `~/.config/amdl/config.toml` (`[paths] source=… output=…`). Flags always
+  `~/.config/amdl/config.toml` (`[paths] source=… output=…`), **or** set them
+  programmatically with `amdl configure set …` (see below). Flags always
   override config.
 - `--json` on **every** batch command prints structured results; pipe to `jq`.
 - Every mutating run is **journaled** so `amdl undo` can revert it (W8) — a safety
   net if a step goes wrong.
+
+## Configuring settings programmatically (`configure`)
+
+Every setting can be read/written without hand-editing the file, so config is
+scriptable. Keys are dotted `section.field`; `amdl configure keys` lists them all.
+
+```sh
+amdl configure keys                                   # every settable key + a description
+amdl configure set paths.output /mnt/music/library    # set (or update) a value
+amdl configure set lyrics.aligner_url http://192.168.1.6:8790
+amdl configure set lyrics.lrcapi_first true            # booleans take true/false
+amdl configure get paths.output                        # prints the bare value (empty if unset) — for $(…)
+amdl configure list --json                             # all keys → values, machine-readable
+amdl configure unset lyrics.aligner_url                # delete a setting (revert to unset/default)
+```
+
+Every write **re-renders the whole `config.toml` from one template**, so the
+inline help for *all* settings is preserved no matter which values are set — the
+file stays self-documenting after any `configure set`. Unknown keys and bad
+values (e.g. a non-boolean for a boolean key) error with a non-zero exit and
+touch nothing. A `set`/`unset` refuses to run against a file it can't parse
+rather than clobbering settings it didn't understand.
 
 ## Convention for agents
 
