@@ -1031,6 +1031,12 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             // --no-align opts out. With no aligner configured it simply doesn't run.
             let aligner_url = cfg.lyrics.aligner_url.clone();
             let want_align = !no_align && aligner_url.is_some();
+            // Nudge when no aligner is set — plain lyrics could be timed by an
+            // alignment server. Silenceable via config; hidden in --json.
+            if aligner_url.is_none() && !cfg.lyrics.hide_aligner_hint && !json {
+                ui::info("tip: an alignment server can generate synced lyrics for tracks no source has timed — set [lyrics] aligner_url. https://github.com/jakobhviid/amdl-aligner");
+                ui::info("     disable this message: amdl configure set lyrics.hide_aligner_hint true");
+            }
             let opts = lyrics::Options {
                 upgrade_synced: !no_upgrade, // upgrade is the default; --no-upgrade opts out
                 embed: embed || force_embed, // --force-embed implies --embed

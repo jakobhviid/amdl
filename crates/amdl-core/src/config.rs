@@ -63,6 +63,10 @@ pub struct Lyrics {
     /// lyrics from plain ones by listening to the track. Alignment runs by
     /// default once this is set. See github.com/jakobhviid/amdl-aligner.
     pub aligner_url: Option<String>,
+    /// Silence the one-line tip `lyrics` prints (when no `aligner_url` is set)
+    /// suggesting an alignment server. Default false (tip shown).
+    #[serde(default)]
+    pub hide_aligner_hint: bool,
 }
 
 /// Path to the config file (honours `$XDG_CONFIG_HOME`).
@@ -121,6 +125,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("lyrics.lrcapi_key", "LrcApi key, sent as the Authorization header"),
     ("lyrics.lrcapi_first", "query LrcApi before lrclib.net (true/false)"),
     ("lyrics.aligner_url", "amdl-aligner service URL (enables lyrics alignment)"),
+    ("lyrics.hide_aligner_hint", "hide the 'set up an aligner' tip in lyrics runs (true/false)"),
 ];
 
 /// Read one setting as a display string. `Ok(None)` = valid key but unset;
@@ -138,6 +143,7 @@ pub fn get_value(cfg: &Config, key: &str) -> Result<Option<String>, String> {
         "lyrics.lrcapi_key" => s(&cfg.lyrics.lrcapi_key),
         "lyrics.lrcapi_first" => Some(cfg.lyrics.lrcapi_first.to_string()),
         "lyrics.aligner_url" => s(&cfg.lyrics.aligner_url),
+        "lyrics.hide_aligner_hint" => Some(cfg.lyrics.hide_aligner_hint.to_string()),
         _ => return Err(unknown_key(key)),
     })
 }
@@ -159,6 +165,7 @@ pub fn set_value(cfg: &mut Config, key: &str, value: &str) -> Result<(), String>
         "lyrics.lrcapi_key" => cfg.lyrics.lrcapi_key = Some(value.to_string()),
         "lyrics.lrcapi_first" => cfg.lyrics.lrcapi_first = parse_bool(value)?,
         "lyrics.aligner_url" => cfg.lyrics.aligner_url = Some(value.to_string()),
+        "lyrics.hide_aligner_hint" => cfg.lyrics.hide_aligner_hint = parse_bool(value)?,
         _ => return Err(unknown_key(key)),
     }
     Ok(())
@@ -176,6 +183,7 @@ pub fn unset_value(cfg: &mut Config, key: &str) -> Result<(), String> {
         "lyrics.lrcapi_key" => cfg.lyrics.lrcapi_key = None,
         "lyrics.lrcapi_first" => cfg.lyrics.lrcapi_first = false,
         "lyrics.aligner_url" => cfg.lyrics.aligner_url = None,
+        "lyrics.hide_aligner_hint" => cfg.lyrics.hide_aligner_hint = false,
         _ => return Err(unknown_key(key)),
     }
     Ok(())
@@ -250,6 +258,9 @@ pub fn render(cfg: &Config) -> String {
     o.push_str("# Alignment runs by default once this is set (`--no-align` opts out per run).\n");
     o.push_str("# See https://github.com/jakobhviid/amdl-aligner\n");
     line_str(&mut o, "aligner_url", &cfg.lyrics.aligner_url, "http://192.168.1.6:8790");
+    o.push_str("# When no aligner_url is set, `lyrics` prints a one-line tip suggesting one.\n");
+    o.push_str("# Set this true to silence that tip.\n");
+    line_bool(&mut o, "hide_aligner_hint", cfg.lyrics.hide_aligner_hint);
     o
 }
 
