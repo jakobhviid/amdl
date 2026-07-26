@@ -78,7 +78,7 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
         files.par_iter().for_each(|f| {
             // Stage 1: settle the sidecar (skip / fetch / upgrade), and hand back
             // its resulting lyric text so later stages can use it.
-            let mut content = settle_sidecar(f, opts, &c, fallback);
+            let (mut content, pre) = settle_sidecar(f, opts, &c, fallback);
             // Stage 1b: if we ended up with *plain* lyrics and no source had a
             // synced version, generate synced ones via the alignment service
             // (Generated tier, marked). Only fires with `--align` + a configured
@@ -98,6 +98,17 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
                                 write_lrc(&lrc, &gen)
                             };
                             if ok {
+                                // Aligning it means it wasn't skipped / left as
+                                // plain after all — move it out of that bucket.
+                                match pre {
+                                    PreCount::Skipped => {
+                                        c.skipped.fetch_sub(1, Ordering::Relaxed);
+                                    }
+                                    PreCount::OkPlain => {
+                                        c.ok_plain.fetch_sub(1, Ordering::Relaxed);
+                                    }
+                                    PreCount::None => {}
+                                }
                                 c.aligned.fetch_add(1, Ordering::Relaxed);
                                 content = Some(gen);
                             }
@@ -121,10 +132,25 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
     c.into_report()
 }
 
+/// Which tally `settle_sidecar` charged this track to — so that if the align
+/// stage then times it, we can move it out of that bucket and into `aligned`
+/// (a file that gets aligned wasn't really "skipped" or left as plain).
+#[derive(Clone, Copy, PartialEq)]
+enum PreCount {
+    None,
+    Skipped,
+    OkPlain,
+}
+
 /// Ensure the sidecar `.lrc` is present/upgraded, tallying the outcome, and
-/// return the lyric text now on disk (for embedding), or `None` when there are
-/// no usable lyrics for this track.
-fn settle_sidecar(f: &Path, opts: Options, c: &Counters, fallback: Option<&Fallback>) -> Option<String> {
+/// return the lyric text now on disk (for embedding) plus the bucket it was
+/// charged to. `None` content means there are no usable lyrics for this track.
+fn settle_sidecar(
+    f: &Path,
+    opts: Options,
+    c: &Counters,
+    fallback: Option<&Fallback>,
+) -> (Option<String>, PreCount) {
     let lrc = f.with_extension("lrc");
     if lrc.exists() {
         // Existing sidecar: normally skip. With `upgrade_synced`, a *plain* .lrc
@@ -134,30 +160,30 @@ fn settle_sidecar(f: &Path, opts: Options, c: &Counters, fallback: Option<&Fallb
             if let Some(Fetched::Synced(s)) = fetch_for(f, fallback) {
                 if upgrade_lrc(&lrc, &existing, &s) {
                     c.upgraded.fetch_add(1, Ordering::Relaxed);
-                    return Some(s);
+                    return (Some(s), PreCount::None);
                 }
             }
         }
         // Left as-is (already synced, no synced upgrade available, or no upgrade).
         c.skipped.fetch_add(1, Ordering::Relaxed);
-        return String::from_utf8(existing).ok();
+        return (String::from_utf8(existing).ok(), PreCount::Skipped);
     }
     match fetch_for(f, fallback) {
         Some(Fetched::Synced(s)) => {
             if write_lrc(&lrc, &s) {
                 c.ok_synced.fetch_add(1, Ordering::Relaxed);
             }
-            Some(s)
+            (Some(s), PreCount::None)
         }
         Some(Fetched::Plain(s)) => {
             if write_lrc(&lrc, &s) {
                 c.ok_plain.fetch_add(1, Ordering::Relaxed);
             }
-            Some(s)
+            (Some(s), PreCount::OkPlain)
         }
         Some(Fetched::Instrumental) => {
             c.instrumental.fetch_add(1, Ordering::Relaxed);
-            None
+            (None, PreCount::None)
         }
         // No sidecar and nothing from the network. Fall back to lyrics embedded
         // in the file itself (the `LYRICS` tag) as the source — so `--align` can
@@ -166,14 +192,14 @@ fn settle_sidecar(f: &Path, opts: Options, c: &Counters, fallback: Option<&Fallb
         other => {
             if let Some(emb) = tags::read_lyrics(f) {
                 if !emb.trim().is_empty() {
-                    return Some(emb);
+                    return (Some(emb), PreCount::None);
                 }
             }
             match other {
                 None => c.no_meta.fetch_add(1, Ordering::Relaxed),
                 _ => c.not_found.fetch_add(1, Ordering::Relaxed),
             };
-            None
+            (None, PreCount::None)
         }
     }
 }
