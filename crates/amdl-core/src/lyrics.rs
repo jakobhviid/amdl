@@ -88,7 +88,16 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
                     if !is_synced(text.as_bytes()) {
                         if let Some(gen) = align_track(url, f, &text) {
                             let lrc = f.with_extension("lrc");
-                            if upgrade_lrc(&lrc, text.as_bytes(), &gen) {
+                            // If a sidecar already existed we're replacing it
+                            // (plain → synced); if the lyrics only lived in the
+                            // file's tag there's no sidecar yet, so this creates
+                            // one (undo then deletes it rather than restoring).
+                            let ok = if lrc.exists() {
+                                upgrade_lrc(&lrc, text.as_bytes(), &gen)
+                            } else {
+                                write_lrc(&lrc, &gen)
+                            };
+                            if ok {
                                 c.aligned.fetch_add(1, Ordering::Relaxed);
                                 content = Some(gen);
                             }
@@ -133,29 +142,37 @@ fn settle_sidecar(f: &Path, opts: Options, c: &Counters, fallback: Option<&Fallb
         c.skipped.fetch_add(1, Ordering::Relaxed);
         return String::from_utf8(existing).ok();
     }
-    let Some(fetched) = fetch_for(f, fallback) else {
-        c.no_meta.fetch_add(1, Ordering::Relaxed);
-        return None;
-    };
-    match fetched {
-        Fetched::Synced(s) => {
+    match fetch_for(f, fallback) {
+        Some(Fetched::Synced(s)) => {
             if write_lrc(&lrc, &s) {
                 c.ok_synced.fetch_add(1, Ordering::Relaxed);
             }
             Some(s)
         }
-        Fetched::Plain(s) => {
+        Some(Fetched::Plain(s)) => {
             if write_lrc(&lrc, &s) {
                 c.ok_plain.fetch_add(1, Ordering::Relaxed);
             }
             Some(s)
         }
-        Fetched::Instrumental => {
+        Some(Fetched::Instrumental) => {
             c.instrumental.fetch_add(1, Ordering::Relaxed);
             None
         }
-        Fetched::NotFound => {
-            c.not_found.fetch_add(1, Ordering::Relaxed);
+        // No sidecar and nothing from the network. Fall back to lyrics embedded
+        // in the file itself (the `LYRICS` tag) as the source — so `--align` can
+        // time a track whose only lyrics live inside the file. `None` here = no
+        // meta to even query with.
+        other => {
+            if let Some(emb) = tags::read_lyrics(f) {
+                if !emb.trim().is_empty() {
+                    return Some(emb);
+                }
+            }
+            match other {
+                None => c.no_meta.fetch_add(1, Ordering::Relaxed),
+                _ => c.not_found.fetch_add(1, Ordering::Relaxed),
+            };
             None
         }
     }
