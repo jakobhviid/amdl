@@ -290,13 +290,20 @@ subset tier is heuristic and labelled as such; review before removing anything.
 
 Every mutating command is **journaled by default**, so you can revert it. Undo
 deletes files amdl created (convert/lyrics/recover) and restores tags/covers it
-changed (tag/identify/covers/paste/regroup).
+changed (tag/identify/covers/paste/regroup/embed).
+
+On a terminal, a bare `amdl undo` opens an **interactive picker** — recent runs
+listed newest-first with a relative date, the command, and how many files each
+touched; the most recent is preselected. Press Enter to revert it, type a number
+to choose another, `d`/`dN` to preview a run with a dry-run first, or `q` to
+cancel. When stdin isn't a terminal (scripts/pipes), or you pass a run id,
+`--dry-run`, or `--json`, undo stays non-interactive and reverts directly.
 
 ```sh
-amdl undo                 # revert the most recent mutating run
-amdl undo --list          # recent runs: id · #changes · command
-amdl undo <run-id>        # revert a specific run
-amdl undo --dry-run       # preview what would be reverted
+amdl undo                 # terminal: interactive picker · non-terminal: revert most recent
+amdl undo --list          # recent runs: date · command · #files · id  (--json for machine form)
+amdl undo <run-id>        # revert a specific run (id from --list), non-interactive
+amdl undo --dry-run       # preview the most recent without changing anything
 <any mutating cmd> --no-undo   # don't journal this run
 ```
 
@@ -309,7 +316,7 @@ The journal lives in your OS state dir (`~/.local/state/amdl/undo` on Linux,
 `~/Library/Application Support/amdl/undo` on macOS; override with `$AMDL_UNDO_DIR`)
 and persists across reboots. It's compact — creations store a path+hash, edits
 store just the old tag values (and the old cover only when one is *replaced*) —
-and the last runs are kept, older ones pruned automatically.
+and the newest 25 runs are kept, older ones pruned automatically.
 
 ---
 

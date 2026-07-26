@@ -184,10 +184,43 @@ pub struct UndoReport {
 
 pub struct RunInfo {
     pub id: String,
+    /// The subcommand alone (e.g. `lyrics`) — kept for back-compat.
     pub command: String,
+    /// A compact rendering of the run's argv (e.g. `lyrics --embed`) for humans.
+    pub summary: String,
     pub started_unix: u64,
     pub changes: usize,
     path: PathBuf,
+}
+
+/// Compact one-line rendering of a run's argv for display: the subcommand plus
+/// its flags, with long path-like args shortened to their basename so the
+/// meaningful part (e.g. `lyrics --embed`) stays visible. Truncates the tail.
+fn summarize(argv: &[String]) -> String {
+    let parts: Vec<String> = argv
+        .iter()
+        .skip(1)
+        .map(|a| {
+            if a.contains('/') {
+                // path/URL → just the last non-empty segment
+                a.rsplit('/').find(|s| !s.is_empty()).unwrap_or(a).to_string()
+            } else {
+                a.clone()
+            }
+        })
+        .collect();
+    if parts.is_empty() {
+        return "run".to_string();
+    }
+    let joined = parts.join(" ");
+    const MAX: usize = 44;
+    if joined.chars().count() > MAX {
+        let mut s: String = joined.chars().take(MAX - 1).collect();
+        s.push('…');
+        s
+    } else {
+        joined
+    }
 }
 
 /// Reverse the most recent run (or a specific one by id). Best-effort: an entry
@@ -367,6 +400,7 @@ fn list_runs() -> Vec<RunInfo> {
             out.push(RunInfo {
                 id: e.file_name().to_string_lossy().into_owned(),
                 command: m.argv.get(1).cloned().unwrap_or_default(),
+                summary: summarize(&m.argv),
                 started_unix: m.started_unix,
                 changes: m.entries.len(),
                 path,

@@ -5,6 +5,7 @@ use amdl_core::{config, convert, cookies, covers, dedup, doctor, download, ident
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const REPO_URL: &str = "https://github.com/jakobhviid/amdl";
 const AFTER_HELP: &str = concat!(
@@ -229,11 +230,14 @@ enum Cmd {
         #[arg(long)]
         print_rm: bool,
     },
-    /// Revert the last mutating run (or a specific one) — deletes files amdl
-    /// created and restores tags/covers it changed. Skips anything you've edited
-    /// since (never clobbers your changes). `--list` shows recent runs.
+    /// Revert a mutating run — deletes files amdl created and restores tags/covers
+    /// it changed. Skips anything you've edited since (never clobbers your
+    /// changes). On a terminal, a bare `amdl undo` opens an interactive picker
+    /// (dated, newest-first); pass a run id, `--dry-run`, `--json`, or pipe it to
+    /// get the direct revert-most-recent behavior instead. `--list` shows runs.
     Undo {
-        /// A specific run id (from `--list`); default: the most recent run.
+        /// A specific run id (from `--list`); default: the most recent run (or
+        /// the interactive picker on a terminal).
         run: Option<String>,
         /// List recent undoable runs instead of reverting.
         #[arg(long)]
@@ -436,6 +440,70 @@ fn llm_guide() -> String {
         out.push('\n');
     }
     out
+}
+
+/// Dependency-free "N ago" rendering of a unix timestamp for the undo list.
+fn rel_time(then: u64) -> String {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = now.saturating_sub(then);
+    match secs {
+        0..=44 => "just now".to_string(),
+        45..=89 => "a min ago".to_string(),
+        90..=3599 => format!("{} min ago", (secs + 30) / 60),
+        3600..=7199 => "an hour ago".to_string(),
+        7200..=86399 => format!("{} h ago", (secs + 1800) / 3600),
+        86400..=172_799 => "yesterday".to_string(),
+        _ => format!("{} days ago", secs / 86400),
+    }
+}
+
+/// Interactive `undo` for a terminal: list recent runs (newest first, most-recent
+/// preselected) and let the user pick one, preview it with a dry-run, or cancel.
+/// Only reached on a TTY for a bare `undo`; scripts keep the direct path.
+fn undo_interactive() -> Result<()> {
+    let runs = journal::list();
+    if runs.is_empty() {
+        ui::info("nothing to undo — no runs recorded");
+        return Ok(());
+    }
+    loop {
+        ui::info("Pick a run to undo (newest first):");
+        for (i, r) in runs.iter().enumerate() {
+            let marker = if i == 0 { ">" } else { " " };
+            println!(
+                "  {} {:>2}  {:<11}  {:<40}  {} file(s)",
+                marker, i + 1, rel_time(r.started_unix), r.summary, r.changes
+            );
+        }
+        let ans = ui::ask("\n[Enter]=1  number=pick  d[N]=dry-run  q=cancel:");
+        let ans = ans.trim();
+        if ans.eq_ignore_ascii_case("q") {
+            ui::info("cancelled — nothing reverted");
+            return Ok(());
+        }
+        // `d` / `dN` previews without reverting; Enter or a bare number reverts.
+        let (dry, num) = match ans.strip_prefix(['d', 'D']) {
+            Some(rest) => (true, rest.trim()),
+            None => (false, ans),
+        };
+        let idx = if num.is_empty() {
+            0
+        } else {
+            match num.parse::<usize>() {
+                Ok(n) if (1..=runs.len()).contains(&n) => n - 1,
+                _ => {
+                    ui::warn("enter a run number, d/dN to preview, or q to cancel");
+                    continue;
+                }
+            }
+        };
+        let rep = journal::undo(Some(&runs[idx].id), dry)?;
+        print_undo(&rep);
+        if dry {
+            continue; // previewed only — pick again or confirm
+        }
+        return Ok(());
+    }
 }
 
 fn print_undo(r: &journal::UndoReport) {
@@ -925,18 +993,28 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             if list {
                 let runs = journal::list();
                 if json {
-                    // minimal JSON without exposing internals
-                    let items: Vec<_> = runs.iter().map(|r| serde_json::json!({"id": r.id, "command": r.command, "changes": r.changes})).collect();
+                    let items: Vec<_> = runs.iter().map(|r| serde_json::json!({
+                        "id": r.id, "command": r.command, "summary": r.summary,
+                        "changes": r.changes, "started_unix": r.started_unix,
+                    })).collect();
                     println!("{}", serde_json::to_string_pretty(&items)?);
                 } else if runs.is_empty() {
                     ui::info("no undoable runs recorded");
                 } else {
                     ui::info(&format!("{} undoable run(s), newest first:", runs.len()));
                     for r in &runs {
-                        println!("  {}  · {} change(s)  · {}", r.id, r.changes, r.command);
+                        println!(
+                            "  {:<11}  {:<40}  {} file(s)   [{}]",
+                            rel_time(r.started_unix), r.summary, r.changes, r.id
+                        );
                     }
                 }
                 return Ok(());
+            }
+            // Humans on a terminal get an interactive picker for a bare `undo`;
+            // an explicit id, --dry-run, --json, or a pipe keeps the direct path.
+            if run.is_none() && !dry_run && !json && ui::stdin_tty() {
+                return undo_interactive();
             }
             let rep = journal::undo(run.as_deref(), dry_run)?;
             if json {
