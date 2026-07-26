@@ -155,7 +155,13 @@ fn settle_sidecar(
     if lrc.exists() {
         // Existing sidecar: normally skip. With `upgrade_synced`, a *plain* .lrc
         // is re-queried and replaced iff a source has a synced version.
-        let existing = std::fs::read(&lrc).unwrap_or_default();
+        // A sidecar we can't read must NOT be treated as empty: doing so would
+        // let the upgrade below overwrite it and journal an empty "before" (undo
+        // would then restore nothing). On a read error, leave it strictly alone.
+        let Ok(existing) = std::fs::read(&lrc) else {
+            c.skipped.fetch_add(1, Ordering::Relaxed);
+            return (None, PreCount::Skipped);
+        };
         if opts.upgrade_synced && !is_synced(&existing) {
             if let Some(Fetched::Synced(s)) = fetch_for(f, fallback) {
                 if upgrade_lrc(&lrc, &existing, &s) {
