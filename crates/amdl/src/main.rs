@@ -216,9 +216,10 @@ enum Cmd {
         #[arg(long)]
         init: bool,
     },
-    /// Get/set/delete individual config settings (scriptable). Every write
-    /// re-renders the full annotated config.toml, so its inline help is kept.
-    /// Run `amdl configure keys` for every settable key.
+    /// Get/set/delete individual config settings. Every write re-renders the full
+    /// annotated config.toml, so its inline help is kept. Keys work as words
+    /// (`lyrics hints`) or dotted (`lyrics.hints`); booleans take on/off.
+    #[command(after_help = CONFIGURE_HELP, after_long_help = CONFIGURE_HELP)]
     Configure {
         #[command(subcommand)]
         action: ConfigAction,
@@ -284,31 +285,54 @@ enum Cmd {
     Man,
 }
 
-/// Sub-actions of `amdl configure` — the scriptable settings surface. Keys are
-/// dotted `section.field` (e.g. `lyrics.aligner_url`); see `configure keys`.
+/// Shown under `amdl configure --help`, so the settable keys are discoverable
+/// without a separate command. Kept in sync with `config::KEYS` by a unit test.
+const CONFIGURE_HELP: &str = "\
+Settable keys (run `amdl configure keys` for a description of each):
+  paths.source          paths.output          convert.bitrate
+  keys.acoustid         keys.discogs
+  lyrics.lrcapi_url     lyrics.lrcapi_key     lyrics.lrcapi_first
+  lyrics.aligner_url    lyrics.hints
+
+Keys can be written as words or dotted, and booleans take on/off:
+  amdl configure set lyrics hints off
+  amdl configure set lyrics.hints off
+  amdl configure set paths output /music/lib
+  amdl configure get lyrics aligner_url";
+
+/// Sub-actions of `amdl configure`. A key can be given as words (`lyrics hints`)
+/// or dotted (`lyrics.hints`); [`join_key`] normalizes both. Booleans take
+/// on/off (true/false also accepted). See `configure keys` / `configure --help`.
 #[derive(Subcommand)]
 enum ConfigAction {
-    /// Set (or update) a setting: `configure set lyrics.aligner_url http://192.168.1.6:8790`.
+    /// Set (or update) a setting: `configure set lyrics hints off`.
     Set {
-        /// Dotted key, e.g. `paths.output` (see `configure keys`).
-        key: String,
-        /// New value. Booleans take `true`/`false`; use `unset` to clear a setting.
-        value: String,
+        /// Key (words or dotted) followed by the value, e.g. `lyrics hints off`.
+        #[arg(required = true, num_args = 2.., value_name = "KEY... VALUE")]
+        args: Vec<String>,
     },
-    /// Delete a setting, reverting it to unset/default: `configure unset lyrics.aligner_url`.
+    /// Delete a setting, reverting it to its default: `configure unset lyrics aligner_url`.
     Unset {
-        /// Dotted key to clear (see `configure keys`).
-        key: String,
+        /// Key, words or dotted (see `configure keys`).
+        #[arg(required = true, num_args = 1.., value_name = "KEY")]
+        key: Vec<String>,
     },
     /// Print one setting's current value (nothing if unset) — for scripts.
     Get {
-        /// Dotted key to read (see `configure keys`).
-        key: String,
+        /// Key, words or dotted (see `configure keys`).
+        #[arg(required = true, num_args = 1.., value_name = "KEY")]
+        key: Vec<String>,
     },
     /// List every setting with its current value (`--json` for a machine object).
     List,
     /// List every settable key with a one-line description.
     Keys,
+}
+
+/// Normalize a key given as words (`["lyrics","hints"]`) or as a single dotted
+/// token (`["lyrics.hints"]`) into the canonical dotted key `lyrics.hints`.
+fn join_key(parts: &[String]) -> String {
+    parts.join(".")
 }
 
 fn cwd() -> PathBuf {
@@ -1033,9 +1057,9 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             let want_align = !no_align && aligner_url.is_some();
             // Nudge when no aligner is set — plain lyrics could be timed by an
             // alignment server. Silenceable via config; hidden in --json.
-            if aligner_url.is_none() && !cfg.lyrics.hide_aligner_hint && !json {
+            if aligner_url.is_none() && cfg.lyrics.hints && !json {
                 ui::info("tip: an alignment server can generate synced lyrics for tracks no source has timed — set [lyrics] aligner_url. https://github.com/jakobhviid/amdl-aligner");
-                ui::info("     disable this message: amdl configure set lyrics.hide_aligner_hint true");
+                ui::info("     turn off these hints: amdl configure set lyrics hints off");
             }
             let opts = lyrics::Options {
                 upgrade_synced: !no_upgrade, // upgrade is the default; --no-upgrade opts out
@@ -1146,7 +1170,11 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
         Cmd::Configure { action } => {
             let as_err = |e: String| anyhow::anyhow!(e);
             match action {
-                ConfigAction::Set { key, value } => {
+                ConfigAction::Set { args } => {
+                    // Last token is the value; everything before it is the key
+                    // (words or a single dotted token) — so both grammars work.
+                    let value = args.last().cloned().unwrap_or_default();
+                    let key = join_key(&args[..args.len() - 1]);
                     let mut cfg = config::load_strict().map_err(as_err)?;
                     config::set_value(&mut cfg, &key, &value).map_err(as_err)?;
                     config::save(&cfg)?;
@@ -1154,12 +1182,14 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                     ui::info(&format!("wrote {}", config::path().display()));
                 }
                 ConfigAction::Unset { key } => {
+                    let key = join_key(&key);
                     let mut cfg = config::load_strict().map_err(as_err)?;
                     config::unset_value(&mut cfg, &key).map_err(as_err)?;
                     config::save(&cfg)?;
                     ui::ok(&format!("unset {key}"));
                 }
                 ConfigAction::Get { key } => {
+                    let key = join_key(&key);
                     let cfg = config::load_strict().map_err(as_err)?;
                     let val = config::get_value(&cfg, &key).map_err(as_err)?;
                     if json {
@@ -1293,6 +1323,40 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
         Cmd::Man => {
             clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configure_help_lists_every_settable_key() {
+        for (key, _) in config::KEYS {
+            assert!(CONFIGURE_HELP.contains(key), "configure --help is missing `{key}`");
+        }
+    }
+
+    #[test]
+    fn join_key_accepts_words_and_dotted() {
+        assert_eq!(join_key(&["lyrics".into(), "hints".into()]), "lyrics.hints");
+        assert_eq!(join_key(&["lyrics.hints".into()]), "lyrics.hints");
+        assert_eq!(join_key(&["paths".into(), "output".into()]), "paths.output");
+    }
+
+    #[test]
+    fn cli_parses_both_configure_grammars() {
+        use clap::Parser;
+        // words: `configure set lyrics hints off`
+        let words = Cli::try_parse_from(["amdl", "configure", "set", "lyrics", "hints", "off"]).unwrap();
+        // dotted: `configure set lyrics.hints off`
+        let dotted = Cli::try_parse_from(["amdl", "configure", "set", "lyrics.hints", "off"]).unwrap();
+        for cli in [words, dotted] {
+            let Cmd::Configure { action: ConfigAction::Set { args } } = cli.cmd else { panic!("expected configure set") };
+            let value = args.last().unwrap().clone();
+            let key = join_key(&args[..args.len() - 1]);
+            assert_eq!((key.as_str(), value.as_str()), ("lyrics.hints", "off"));
         }
     }
 }

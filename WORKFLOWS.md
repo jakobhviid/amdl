@@ -18,19 +18,22 @@ takes `--json`, so a step's output can be inspected and fed to the next.
 - Every mutating run is **journaled** so `amdl undo` can revert it (W8) — a safety
   net if a step goes wrong.
 
-## Configuring settings programmatically (`configure`)
+## Configuring settings (`configure`)
 
-Every setting can be read/written without hand-editing the file, so config is
-scriptable. Keys are dotted `section.field`; `amdl configure keys` lists them all.
+Every setting can be read/written without hand-editing the file. A key can be
+written as **words** (`lyrics hints`) or **dotted** (`lyrics.hints`) — both work,
+so it's friendly to type and easy to script. `amdl configure --help` lists the
+keys; `amdl configure keys` adds a description for each.
 
 ```sh
-amdl configure keys                                   # every settable key + a description
-amdl configure set paths.output /mnt/music/library    # set (or update) a value
-amdl configure set lyrics.aligner_url http://192.168.1.6:8790
-amdl configure set lyrics.lrcapi_first true            # booleans take true/false
-amdl configure get paths.output                        # prints the bare value (empty if unset) — for $(…)
-amdl configure list --json                             # all keys → values, machine-readable
-amdl configure unset lyrics.aligner_url                # delete a setting (revert to unset/default)
+amdl configure --help                                 # lists every settable key
+amdl configure set lyrics hints off                   # words + on/off for booleans
+amdl configure set lyrics.hints off                   # ...same, dotted (equivalent)
+amdl configure set paths output /mnt/music/library    # set (or update) a value
+amdl configure set lyrics aligner_url http://192.168.1.6:8790
+amdl configure get paths output                       # bare value (empty if unset) — for $(…)
+amdl configure list --json                            # all keys → values, machine-readable
+amdl configure unset lyrics aligner_url               # delete a setting (revert to its default)
 ```
 
 Every write **re-renders the whole `config.toml` from one template**, so the

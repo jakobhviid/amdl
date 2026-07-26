@@ -44,7 +44,8 @@ pub struct Keys {
     pub discogs: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
+#[serde(default)]
 pub struct Lyrics {
     /// Optional fallback lyrics server speaking the LrcApi protocol
     /// (HisAtri/LrcApi): `GET {url}/jsonapi?title=&artist=&album=`. Consulted by
@@ -56,17 +57,27 @@ pub struct Lyrics {
     /// lrclib.net. Default (false) keeps lrclib.net primary. Either way a synced
     /// hit still beats a plain one; this only decides which source wins a tie and
     /// is consulted first.
-    #[serde(default)]
     pub lrcapi_first: bool,
     /// Optional forced-alignment service (amdl-aligner) URL, e.g.
     /// "http://192.168.1.6:8790". Enables `lyrics` alignment: generate *synced*
     /// lyrics from plain ones by listening to the track. Alignment runs by
     /// default once this is set. See github.com/jakobhviid/amdl-aligner.
     pub aligner_url: Option<String>,
-    /// Silence the one-line tip `lyrics` prints (when no `aligner_url` is set)
-    /// suggesting an alignment server. Default false (tip shown).
-    #[serde(default)]
-    pub hide_aligner_hint: bool,
+    /// Show lyric hints — e.g. the tip suggesting an alignment server when none
+    /// is configured. **On by default**; set off to silence all lyric hints.
+    pub hints: bool,
+}
+
+impl Default for Lyrics {
+    fn default() -> Self {
+        Lyrics {
+            lrcapi_url: None,
+            lrcapi_key: None,
+            lrcapi_first: false,
+            aligner_url: None,
+            hints: true, // hints on unless explicitly disabled
+        }
+    }
 }
 
 /// Path to the config file (honours `$XDG_CONFIG_HOME`).
@@ -125,7 +136,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("lyrics.lrcapi_key", "LrcApi key, sent as the Authorization header"),
     ("lyrics.lrcapi_first", "query LrcApi before lrclib.net (true/false)"),
     ("lyrics.aligner_url", "amdl-aligner service URL (enables lyrics alignment)"),
-    ("lyrics.hide_aligner_hint", "hide the 'set up an aligner' tip in lyrics runs (true/false)"),
+    ("lyrics.hints", "show lyric hints, e.g. the alignment-server tip (on/off)"),
 ];
 
 /// Read one setting as a display string. `Ok(None)` = valid key but unset;
@@ -141,9 +152,9 @@ pub fn get_value(cfg: &Config, key: &str) -> Result<Option<String>, String> {
         "keys.discogs" => s(&cfg.keys.discogs),
         "lyrics.lrcapi_url" => s(&cfg.lyrics.lrcapi_url),
         "lyrics.lrcapi_key" => s(&cfg.lyrics.lrcapi_key),
-        "lyrics.lrcapi_first" => Some(cfg.lyrics.lrcapi_first.to_string()),
+        "lyrics.lrcapi_first" => Some(on_off(cfg.lyrics.lrcapi_first)),
         "lyrics.aligner_url" => s(&cfg.lyrics.aligner_url),
-        "lyrics.hide_aligner_hint" => Some(cfg.lyrics.hide_aligner_hint.to_string()),
+        "lyrics.hints" => Some(on_off(cfg.lyrics.hints)),
         _ => return Err(unknown_key(key)),
     })
 }
@@ -165,7 +176,7 @@ pub fn set_value(cfg: &mut Config, key: &str, value: &str) -> Result<(), String>
         "lyrics.lrcapi_key" => cfg.lyrics.lrcapi_key = Some(value.to_string()),
         "lyrics.lrcapi_first" => cfg.lyrics.lrcapi_first = parse_bool(value)?,
         "lyrics.aligner_url" => cfg.lyrics.aligner_url = Some(value.to_string()),
-        "lyrics.hide_aligner_hint" => cfg.lyrics.hide_aligner_hint = parse_bool(value)?,
+        "lyrics.hints" => cfg.lyrics.hints = parse_bool(value)?,
         _ => return Err(unknown_key(key)),
     }
     Ok(())
@@ -183,7 +194,7 @@ pub fn unset_value(cfg: &mut Config, key: &str) -> Result<(), String> {
         "lyrics.lrcapi_key" => cfg.lyrics.lrcapi_key = None,
         "lyrics.lrcapi_first" => cfg.lyrics.lrcapi_first = false,
         "lyrics.aligner_url" => cfg.lyrics.aligner_url = None,
-        "lyrics.hide_aligner_hint" => cfg.lyrics.hide_aligner_hint = false,
+        "lyrics.hints" => cfg.lyrics.hints = Lyrics::default().hints,
         _ => return Err(unknown_key(key)),
     }
     Ok(())
@@ -195,10 +206,15 @@ fn unknown_key(key: &str) -> String {
 
 fn parse_bool(v: &str) -> Result<bool, String> {
     match v.to_ascii_lowercase().as_str() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(format!("expected `true` or `false`, got `{v}`")),
+        "on" | "true" | "yes" | "1" => Ok(true),
+        "off" | "false" | "no" | "0" => Ok(false),
+        _ => Err(format!("expected on/off (or true/false), got `{v}`")),
     }
+}
+
+/// Display a boolean setting in the friendly `on`/`off` vocabulary.
+fn on_off(b: bool) -> String {
+    if b { "on".into() } else { "off".into() }
 }
 
 /// The starter config `amdl config --init` writes: the full annotated template
@@ -258,9 +274,16 @@ pub fn render(cfg: &Config) -> String {
     o.push_str("# Alignment runs by default once this is set (`--no-align` opts out per run).\n");
     o.push_str("# See https://github.com/jakobhviid/amdl-aligner\n");
     line_str(&mut o, "aligner_url", &cfg.lyrics.aligner_url, "http://192.168.1.6:8790");
-    o.push_str("# When no aligner_url is set, `lyrics` prints a one-line tip suggesting one.\n");
-    o.push_str("# Set this true to silence that tip.\n");
-    line_bool(&mut o, "hide_aligner_hint", cfg.lyrics.hide_aligner_hint);
+    o.push_str("# Lyric hints — e.g. the tip suggesting an alignment server when none is set.\n");
+    o.push_str("# On by default; disable with `amdl configure set lyrics hints off`.\n");
+    // `hints` defaults on, so show it commented by default; only an explicit
+    // off becomes an active line (TOML booleans are true/false — the on/off
+    // vocabulary is for the CLI, this file mirrors the stored value).
+    if cfg.lyrics.hints {
+        o.push_str("# hints = true\n");
+    } else {
+        o.push_str("hints = false\n");
+    }
     o
 }
 
@@ -318,7 +341,8 @@ mod tests {
         set_value(&mut cfg, "lyrics.lrcapi_first", "true").unwrap();
 
         assert_eq!(get_value(&cfg, "lyrics.aligner_url").unwrap().as_deref(), Some("http://192.168.1.6:8790"));
-        assert_eq!(get_value(&cfg, "lyrics.lrcapi_first").unwrap().as_deref(), Some("true"));
+        // Booleans display as on/off regardless of how they were set.
+        assert_eq!(get_value(&cfg, "lyrics.lrcapi_first").unwrap().as_deref(), Some("on"));
 
         // Rendered file must still carry the full help AND parse back to the same values.
         let rendered = render(&cfg);
@@ -333,6 +357,26 @@ mod tests {
         unset_value(&mut cfg, "lyrics.aligner_url").unwrap();
         assert!(get_value(&cfg, "lyrics.aligner_url").unwrap().is_none());
         assert!(render(&cfg).contains("# aligner_url = "), "unset should re-comment the line");
+    }
+
+    #[test]
+    fn booleans_accept_on_off_and_hints_defaults_on() {
+        let mut cfg = Config::default();
+        // hints is on by default and displays as such.
+        assert_eq!(get_value(&cfg, "lyrics.hints").unwrap().as_deref(), Some("on"));
+        assert!(render(&cfg).contains("# hints = true"), "default hints stays commented");
+        // `off` disables it; the rendered file mirrors it and round-trips.
+        set_value(&mut cfg, "lyrics.hints", "off").unwrap();
+        assert_eq!(get_value(&cfg, "lyrics.hints").unwrap().as_deref(), Some("off"));
+        let rendered = render(&cfg);
+        assert!(rendered.contains("hints = false"));
+        let back: Config = toml::from_str(&rendered).unwrap();
+        assert!(!back.lyrics.hints);
+        // `on` and `yes`/`1` are all truthy; unset restores the default (on).
+        set_value(&mut cfg, "lyrics.hints", "yes").unwrap();
+        assert!(cfg.lyrics.hints);
+        unset_value(&mut cfg, "lyrics.hints").unwrap();
+        assert!(cfg.lyrics.hints);
     }
 
     #[test]
