@@ -496,7 +496,7 @@ fn parse_lrcapi(body: &str) -> Fetched {
         if is_synced(lrc.as_bytes()) {
             return Fetched::Synced(lrc.to_string());
         }
-        if plain.is_none() {
+        if plain.is_none() && looks_like_lyric(lrc) {
             plain = Some(lrc.to_string());
         }
     }
@@ -519,11 +519,29 @@ fn classify(v: &serde_json::Value) -> Fetched {
         }
     }
     if let Some(s) = v.get("plainLyrics").and_then(|x| x.as_str()) {
-        if !s.trim().is_empty() {
+        if looks_like_lyric(s) {
             return Fetched::Plain(s.to_string());
         }
     }
     Fetched::NotFound
+}
+
+/// Whether a *plain* lyric body is actually a lyric and not a placeholder some
+/// uploads carry instead — the `not_lyrics` failure bucket: a literal
+/// "Instrumental"/"(Instrumental)" stub, a one-word title echo, or something too
+/// short to be a real lyric. Synced bodies aren't checked (their timestamps make
+/// them structurally lyrics).
+fn looks_like_lyric(text: &str) -> bool {
+    let t = text.trim();
+    if t.chars().count() < 8 {
+        return false; // too short to be lyrics
+    }
+    let low = t.to_ascii_lowercase();
+    if matches!(low.as_str(), "instrumental" | "(instrumental)" | "[instrumental]") {
+        return false;
+    }
+    // A single token with no interior whitespace is a stub, not lyrics.
+    t.split_whitespace().count() > 1
 }
 
 #[derive(Default)]
@@ -645,7 +663,7 @@ fn fmt_ts(sec: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{best_of, candidate_matches, is_synced, parse_lrcapi, should_embed, title_says_instrumental, Fetched};
+    use super::{best_of, candidate_matches, is_synced, looks_like_lyric, parse_lrcapi, should_embed, title_says_instrumental, Fetched};
 
     #[test]
     fn lrcapi_parse_prefers_synced_then_plain() {
@@ -727,6 +745,17 @@ mod tests {
         assert!(!is_synced(b"[ar:Rick Astley]\n[length:03:33]\nplain words here"));
         // A leading bracket with no digit-then-colon is not a timestamp.
         assert!(!is_synced(b"[chorus]\nwords"));
+    }
+
+    #[test]
+    fn placeholder_bodies_are_not_accepted_as_lyrics() {
+        // Stubs / placeholders (the not_lyrics bucket) → rejected.
+        for stub in ["Instrumental", "(Instrumental)", "[instrumental]", "Guru", "x", ""] {
+            assert!(!looks_like_lyric(stub), "{stub:?} should not count as a lyric");
+        }
+        // Real multi-word lyric text → accepted.
+        assert!(looks_like_lyric("All my life I've been good but now\nWhat the hell"));
+        assert!(looks_like_lyric("La la la la la la"));
     }
 
     #[test]
