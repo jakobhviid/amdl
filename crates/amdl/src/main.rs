@@ -887,7 +887,11 @@ fn main() -> Result<()> {
     }
     let _ = ctrlc::set_handler(|| {
         eprintln!("\nCancelled.");
-        std::process::exit(0);
+        // Commit the journal first so a mid-run mutating command's partial writes
+        // stay undoable, then exit 130 (SIGINT) — cancellation is not success, and
+        // a script must be able to tell an interrupted run from a completed one.
+        let _ = journal::commit();
+        std::process::exit(130);
     });
     let cli = Cli::parse();
     ui::set_verbosity(if cli.quiet { 0 } else if cli.verbose { 2 } else { 1 });
