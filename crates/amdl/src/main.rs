@@ -136,6 +136,16 @@ enum Cmd {
         /// each replacement is journaled for `undo`.
         #[arg(long)]
         upgrade_synced: bool,
+        /// Also embed each track's lyrics into its audio file's LYRICS tag (the
+        /// .lrc sidecar is kept). Embeds existing sidecars and freshly-fetched
+        /// alike. Never downgrades: writes only when nothing is embedded or as a
+        /// plain→synced upgrade. Journaled for `undo`.
+        #[arg(long)]
+        embed: bool,
+        /// With --embed, overwrite an embedded lyric even when it isn't an
+        /// upgrade — including replacing an already-synced embed. Implies --embed.
+        #[arg(long)]
+        force_embed: bool,
     },
     /// Identify tracks by sound (AcoustID fingerprint) to fix untagged/mis-tagged
     /// files. Needs [keys] acoustid (or $ACOUSTID_KEY). --apply writes the match.
@@ -769,12 +779,17 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs, upgrade_synced } => {
+        Cmd::Lyrics { output, jobs, upgrade_synced, embed, force_embed } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
-            let r = lyrics::backfill(&output, jobs, upgrade_synced);
+            let opts = lyrics::Options {
+                upgrade_synced,
+                embed: embed || force_embed, // --force-embed implies --embed
+                force_embed,
+            };
+            let r = lyrics::backfill(&output, jobs, opts);
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
@@ -786,6 +801,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                         ui::tally("synced", r.ok_synced, Good),
                         ui::tally("plain", r.ok_plain, Good),
                         ui::tally("upgraded", r.upgraded, Good),
+                        ui::tally("embedded", r.embedded, Good),
                         ui::tally("not-found", r.not_found, Dim),
                         ui::tally("instrumental", r.instrumental, Dim),
                         ui::tally("no-meta", r.no_meta, Dim),

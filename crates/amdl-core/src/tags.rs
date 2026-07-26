@@ -188,6 +188,31 @@ pub fn set_album_grouping(path: &Path, album: &str, compilation: bool) -> Result
     Ok(())
 }
 
+/// Read the embedded lyrics (`LYRICS` Vorbis comment / equivalent), if any.
+pub fn read_lyrics(path: &Path) -> Option<String> {
+    let tagged = open(path)?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    tag.get_string(&ItemKey::Lyrics).map(|s| s.to_string())
+}
+
+/// Embed `lyrics` (plain or LRC-format synced text) into the file's `LYRICS`
+/// tag, replacing any existing value and preserving every other field. Used by
+/// `lyrics --embed`; the caller decides *whether* to write (never-downgrade).
+pub fn set_lyrics(path: &Path, lyrics: &str) -> Result<()> {
+    let mut tagged = Probe::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read()?;
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(TagType::VorbisComments));
+    }
+    let tag = tagged.primary_tag_mut().expect("tag present");
+    tag.insert(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lyrics.to_string())));
+    tagged
+        .save_to_path(path, WriteOptions::default())
+        .with_context(|| format!("save lyrics to {}", path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_junk_key;

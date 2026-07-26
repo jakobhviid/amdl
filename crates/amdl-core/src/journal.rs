@@ -72,6 +72,8 @@ struct Snapshot {
     album: Option<String>,
     album_artist: Option<String>,
     compilation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lyrics: Option<String>,
     /// blake3 of the old front-cover bytes (stored under `objects/`), or None if
     /// the file had no cover before the edit.
     picture: Option<String>,
@@ -278,6 +280,7 @@ fn snapshot(path: &Path) -> Result<Snapshot> {
         s.album = tag.album().map(|c| c.into_owned());
         s.album_artist = tag.get_string(&ItemKey::AlbumArtist).map(str::to_string);
         s.compilation = tag.get_string(&ItemKey::FlagCompilation).map(str::to_string);
+        s.lyrics = tag.get_string(&ItemKey::Lyrics).map(str::to_string);
         let pics = tag.pictures();
         if let Some(pic) = pics.iter().find(|p| p.pic_type() == PictureType::CoverFront).or_else(|| pics.first()) {
             let hash = hash_bytes(pic.data());
@@ -300,6 +303,7 @@ fn restore(path: &Path, snap: &Snapshot) -> Result<()> {
     match &snap.album { Some(v) => tag.set_album(v.clone()), None => { tag.remove_album(); } }
     set_or_clear(tag, ItemKey::AlbumArtist, &snap.album_artist);
     set_or_clear(tag, ItemKey::FlagCompilation, &snap.compilation);
+    set_or_clear(tag, ItemKey::Lyrics, &snap.lyrics);
     while !tag.pictures().is_empty() {
         tag.remove_picture(0);
     }

@@ -5,9 +5,14 @@
 //! per-file error isolation, parallel. Large `not_found` counts are normal for
 //! niche/Danish catalogs — that's not a failure.
 //!
-//! With `upgrade` on, an existing *plain* (untimed) `.lrc` is re-queried and
-//! replaced when LRCLIB has a synced version; the old bytes are journaled so
+//! With `upgrade_synced` on, an existing *plain* (untimed) `.lrc` is re-queried
+//! and replaced when LRCLIB has a synced version; the old bytes are journaled so
 //! `undo` can restore them. Already-synced files are still skipped.
+//!
+//! With `embed` on, the sidecar's lyrics are also written into the audio file's
+//! `LYRICS` tag (sidecar kept). Embedding **never downgrades**: it writes only
+//! when nothing is embedded or as a plain→synced upgrade; a synced embed is left
+//! untouched (and identical content is never rewritten) unless `force_embed`.
 use crate::{tags, ui};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -20,13 +25,28 @@ const UA: &str = concat!("amdl/", env!("CARGO_PKG_VERSION"), " (https://github.c
 pub struct Report {
     pub ok_synced: usize,
     pub ok_plain: usize,
-    /// Existing *plain* `.lrc` files replaced with a synced version from LRCLIB
-    /// (only counted when `upgrade` is on).
+    /// Existing *plain* `.lrc` sidecars replaced with a synced version from LRCLIB
+    /// (only counted when `upgrade_synced` is on).
     pub upgraded: usize,
+    /// Tracks whose lyrics were (re)written into the audio file's `LYRICS` tag
+    /// (only counted when `embed` is on).
+    pub embedded: usize,
     pub not_found: usize,
     pub instrumental: usize,
     pub no_meta: usize,
     pub skipped: usize,
+}
+
+/// What a `lyrics` run should do beyond the default sidecar backfill.
+#[derive(Clone, Copy, Default)]
+pub struct Options {
+    /// Re-time an existing *plain* `.lrc` to synced when LRCLIB now has one.
+    pub upgrade_synced: bool,
+    /// Also embed the sidecar's lyrics into the audio file's `LYRICS` tag.
+    pub embed: bool,
+    /// When embedding, overwrite even if it isn't an upgrade — including
+    /// replacing an already-*synced* embed. Off = never downgrade / never churn.
+    pub force_embed: bool,
 }
 
 enum Fetched {
@@ -36,7 +56,7 @@ enum Fetched {
     NotFound,
 }
 
-pub fn backfill(output: &Path, jobs: usize, upgrade: bool) -> Report {
+pub fn backfill(output: &Path, jobs: usize, opts: Options) -> Report {
     let files = list_audio(output);
     if files.is_empty() {
         return Report::default();
@@ -49,49 +69,16 @@ pub fn backfill(output: &Path, jobs: usize, upgrade: bool) -> Report {
         .expect("thread pool");
     pool.install(|| {
         files.par_iter().for_each(|f| {
-            let lrc = f.with_extension("lrc");
-            if lrc.exists() {
-                // Existing sidecar: normally skip. With `upgrade`, a *plain* .lrc
-                // is re-queried and replaced iff LRCLIB has a synced version.
-                let existing = std::fs::read(&lrc).unwrap_or_default();
-                if !upgrade || is_synced(&existing) {
-                    c.skipped.fetch_add(1, Ordering::Relaxed);
-                    pb.inc(1);
-                    return;
-                }
-                match fetch_for(f) {
-                    Some(Fetched::Synced(s)) if upgrade_lrc(&lrc, &existing, &s) => {
-                        c.upgraded.fetch_add(1, Ordering::Relaxed);
+            // Stage 1: settle the sidecar (skip / fetch / upgrade), and hand back
+            // its resulting lyric text so stage 2 can embed it.
+            let content = settle_sidecar(f, opts, &c);
+            // Stage 2: optionally embed that text into the audio file's tags,
+            // honoring the never-downgrade rule.
+            if opts.embed {
+                if let Some(text) = &content {
+                    if embed_lyrics(f, text, opts.force_embed) {
+                        c.embedded.fetch_add(1, Ordering::Relaxed);
                     }
-                    // Only synced upgrades a plain file; anything else leaves it as-is.
-                    _ => {
-                        c.skipped.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                pb.inc(1);
-                return;
-            }
-            let Some(fetched) = fetch_for(f) else {
-                c.no_meta.fetch_add(1, Ordering::Relaxed);
-                pb.inc(1);
-                return;
-            };
-            match fetched {
-                Fetched::Synced(s) => {
-                    if write_lrc(&lrc, &s) {
-                        c.ok_synced.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                Fetched::Plain(s) => {
-                    if write_lrc(&lrc, &s) {
-                        c.ok_plain.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                Fetched::Instrumental => {
-                    c.instrumental.fetch_add(1, Ordering::Relaxed);
-                }
-                Fetched::NotFound => {
-                    c.not_found.fetch_add(1, Ordering::Relaxed);
                 }
             }
             pb.inc(1);
@@ -99,6 +86,55 @@ pub fn backfill(output: &Path, jobs: usize, upgrade: bool) -> Report {
     });
     pb.finish_and_clear();
     c.into_report()
+}
+
+/// Ensure the sidecar `.lrc` is present/upgraded, tallying the outcome, and
+/// return the lyric text now on disk (for embedding), or `None` when there are
+/// no usable lyrics for this track.
+fn settle_sidecar(f: &Path, opts: Options, c: &Counters) -> Option<String> {
+    let lrc = f.with_extension("lrc");
+    if lrc.exists() {
+        // Existing sidecar: normally skip. With `upgrade_synced`, a *plain* .lrc
+        // is re-queried and replaced iff LRCLIB has a synced version.
+        let existing = std::fs::read(&lrc).unwrap_or_default();
+        if opts.upgrade_synced && !is_synced(&existing) {
+            if let Some(Fetched::Synced(s)) = fetch_for(f) {
+                if upgrade_lrc(&lrc, &existing, &s) {
+                    c.upgraded.fetch_add(1, Ordering::Relaxed);
+                    return Some(s);
+                }
+            }
+        }
+        // Left as-is (already synced, no synced upgrade available, or no upgrade).
+        c.skipped.fetch_add(1, Ordering::Relaxed);
+        return String::from_utf8(existing).ok();
+    }
+    let Some(fetched) = fetch_for(f) else {
+        c.no_meta.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    match fetched {
+        Fetched::Synced(s) => {
+            if write_lrc(&lrc, &s) {
+                c.ok_synced.fetch_add(1, Ordering::Relaxed);
+            }
+            Some(s)
+        }
+        Fetched::Plain(s) => {
+            if write_lrc(&lrc, &s) {
+                c.ok_plain.fetch_add(1, Ordering::Relaxed);
+            }
+            Some(s)
+        }
+        Fetched::Instrumental => {
+            c.instrumental.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        Fetched::NotFound => {
+            c.not_found.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
 }
 
 /// Read a file's basic tags and fetch LRCLIB lyrics for it. `None` means the
@@ -133,6 +169,29 @@ fn upgrade_lrc(path: &Path, old: &[u8], synced: &str) -> bool {
     }
     crate::journal::replaced(path, old);
     true
+}
+
+/// Embed `text` into `f`'s `LYRICS` tag when `should_embed` allows it (journaled
+/// for `undo`). Returns true iff the tag was written.
+fn embed_lyrics(f: &Path, text: &str, force: bool) -> bool {
+    let current = tags::read_lyrics(f);
+    if !should_embed(current.as_deref(), text, force) {
+        return false;
+    }
+    crate::journal::edit(f, || tags::set_lyrics(f, text)).is_ok()
+}
+
+/// Whether to (over)write an embedded lyric. The never-downgrade rule: embed
+/// when nothing is there, or only as a genuine upgrade (plain → synced).
+/// Identical content is left alone; a synced embed is never replaced by plain,
+/// nor churned by another synced, unless `force` overrides.
+fn should_embed(current: Option<&str>, candidate: &str, force: bool) -> bool {
+    match current {
+        None => true,
+        Some(cur) if cur == candidate => false,
+        Some(_) if force => true,
+        Some(cur) => !is_synced(cur.as_bytes()) && is_synced(candidate.as_bytes()),
+    }
 }
 
 fn write_lrc(path: &Path, content: &str) -> bool {
@@ -212,6 +271,7 @@ struct Counters {
     ok_synced: AtomicUsize,
     ok_plain: AtomicUsize,
     upgraded: AtomicUsize,
+    embedded: AtomicUsize,
     not_found: AtomicUsize,
     instrumental: AtomicUsize,
     no_meta: AtomicUsize,
@@ -223,6 +283,7 @@ impl Counters {
             ok_synced: self.ok_synced.into_inner(),
             ok_plain: self.ok_plain.into_inner(),
             upgraded: self.upgraded.into_inner(),
+            embedded: self.embedded.into_inner(),
             not_found: self.not_found.into_inner(),
             instrumental: self.instrumental.into_inner(),
             no_meta: self.no_meta.into_inner(),
@@ -253,7 +314,42 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_synced;
+    use super::{is_synced, should_embed};
+
+    const PLAIN: &str = "just words\nno timing";
+    const SYNCED: &str = "[00:01.00]timed line\n[00:04.00]second";
+    const SYNCED2: &str = "[00:02.00]different timing\n[00:05.00]second";
+
+    #[test]
+    fn embed_when_nothing_present() {
+        assert!(should_embed(None, PLAIN, false));
+        assert!(should_embed(None, SYNCED, false));
+    }
+
+    #[test]
+    fn embed_never_downgrades_or_churns() {
+        // synced already embedded: don't replace with plain, don't churn synced.
+        assert!(!should_embed(Some(SYNCED), PLAIN, false));
+        assert!(!should_embed(Some(SYNCED), SYNCED2, false));
+        // identical is always a no-op.
+        assert!(!should_embed(Some(SYNCED), SYNCED, false));
+        assert!(!should_embed(Some(PLAIN), PLAIN, false));
+        // plain already embedded, candidate also plain → not an upgrade → skip.
+        assert!(!should_embed(Some(PLAIN), "other plain text", false));
+    }
+
+    #[test]
+    fn embed_upgrades_plain_to_synced() {
+        assert!(should_embed(Some(PLAIN), SYNCED, false));
+    }
+
+    #[test]
+    fn force_overrides_never_downgrade() {
+        assert!(should_embed(Some(SYNCED), PLAIN, true));
+        assert!(should_embed(Some(SYNCED), SYNCED2, true));
+        // even force won't rewrite byte-identical content.
+        assert!(!should_embed(Some(SYNCED), SYNCED, true));
+    }
 
     #[test]
     fn synced_detects_timestamp_tags() {

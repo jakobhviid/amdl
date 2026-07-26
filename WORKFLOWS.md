@@ -55,10 +55,15 @@ only into the output, so it's safe when the source is read-only.
 
 ```sh
 amdl lyrics /music/lib
-amdl lyrics /music/lib --json   # {ok_synced, ok_plain, upgraded, not_found, instrumental, no_meta, skipped}
+amdl lyrics /music/lib --json   # {ok_synced, ok_plain, upgraded, embedded, not_found, instrumental, no_meta, skipped}
 ```
 
 A large `not_found` count is normal for niche/Danish catalogs — not a failure.
+
+`.lrc` files are **sidecars** by default — written next to each track (`Song.opus`
+→ `Song.lrc`), never folded into the audio. That's the most portable form (any
+player that reads a same-name `.lrc` picks them up) and keeps writes
+non-destructive. See `--embed` below for lyrics that travel *inside* the file.
 
 **Upgrade plain → synced (`--upgrade-synced`).** By default an existing `.lrc` is
 skipped on sight, so a library that was backfilled before its tracks had timed
@@ -74,6 +79,30 @@ amdl lyrics /music/lib --upgrade-synced          # timed lyrics where they now e
 amdl lyrics /music/lib --upgrade-synced --json    # `upgraded` counts the plain→synced replacements
 amdl undo                                         # revert an upgrade run (restores the plain .lrc files)
 ```
+
+**Embed lyrics into the file (`--embed`).** Sidecars don't travel: copy a track
+to a phone/DAP/car or hand someone a single file and the `.lrc` is left behind.
+`--embed` also writes each track's lyrics into the audio file's `LYRICS` tag,
+**keeping the sidecar** — so both sidecar- and embed-reading players work. It
+covers the whole library in one pass: every track that has an `.lrc` (already on
+disk *or* freshly fetched this run) gets embedded. Journaled, so `amdl undo`
+strips/restores the tag.
+
+Embedding **never downgrades**. It writes only when the file has no embedded
+lyric yet, or as a genuine **plain → synced** upgrade; an already-*synced* embed
+is left untouched and identical content is never rewritten. To overwrite anyway
+(e.g. replace a synced embed, or re-embed hand-edited lyrics) pass `--force-embed`.
+
+```sh
+amdl lyrics /music/lib --embed                   # embed every track's .lrc (sidecar kept)
+amdl lyrics /music/lib --upgrade-synced --embed   # upgrade sidecars to synced, then embed them
+amdl lyrics /music/lib --embed --json             # `embedded` counts the tags written
+amdl lyrics /music/lib --force-embed              # overwrite even a synced embed (implies --embed)
+amdl undo                                         # revert an embed run (restores the prior tag)
+```
+
+Serving from **Navidrome** (or similar) reads either form off the output tree, so
+embedding is about portability, not your server — sidecars alone already serve.
 
 ### tag — compilation grouping
 
