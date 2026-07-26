@@ -920,8 +920,16 @@ fn main() -> Result<()> {
         print!("{}", llm_guide());
         return Ok(());
     }
+    // If we panic mid-progress-bar, put the terminal's echo back before the
+    // default hook prints — otherwise the shell is left with echo off.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ui::restore_term();
+        prev_hook(info);
+    }));
     let _ = ctrlc::set_handler(|| {
         eprintln!("\nCancelled.");
+        ui::restore_term(); // don't leave the terminal with echo suppressed
         // Commit the journal first so a mid-run mutating command's partial writes
         // stay undoable, then exit 130 (SIGINT) — cancellation is not success, and
         // a script must be able to tell an interrupted run from a completed one.
@@ -937,6 +945,7 @@ fn main() -> Result<()> {
     }
     let outcome = dispatch(cli.cmd, json);
     let _ = journal::commit();
+    ui::restore_term(); // belt-and-suspenders: never hand the shell back with echo off
     outcome
 }
 

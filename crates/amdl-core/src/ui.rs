@@ -6,8 +6,52 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::fmt::Display;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+// ── terminal echo (progress bars) ────────────────────────────────────────────
+// While a progress bar is drawing, a keypress the user makes is echoed by the
+// tty onto the bar's line — arrow keys especially (they emit escape sequences),
+// which makes indicatif redraw a stacked *duplicate* bar. Suppress echo while a
+// bar is live and restore it after (and on ctrl-C / panic — see `restore_term`).
+static SAVED_TERMIOS: Mutex<Option<libc::termios>> = Mutex::new(None);
+
+/// Turn off terminal echo (remembering the prior mode). No-op off a TTY or if
+/// already suppressed. Safe to call repeatedly.
+fn suppress_echo() {
+    if !io::stdin().is_terminal() {
+        return;
+    }
+    let mut saved = SAVED_TERMIOS.lock().unwrap();
+    if saved.is_some() {
+        return; // one bar at a time; already suppressed
+    }
+    // SAFETY: plain termios get/set on our own stdin fd; failures are ignored.
+    unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
+            return;
+        }
+        let orig = t;
+        t.c_lflag &= !libc::ECHO;
+        if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t) == 0 {
+            *saved = Some(orig);
+        }
+    }
+}
+
+/// Restore the terminal echo mode saved by `suppress_echo`, if any. Called on
+/// bar finish, before interactive reads, at program exit, on ctrl-C, and from a
+/// panic hook — so the shell never gets left with echo off.
+pub fn restore_term() {
+    let mut saved = SAVED_TERMIOS.lock().unwrap();
+    if let Some(orig) = saved.take() {
+        // SAFETY: restoring the exact termios we captured, on our own stdin fd.
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &orig);
+        }
+    }
+}
 
 fn no_color() -> bool { std::env::var_os("NO_COLOR").is_some() }
 fn c_out() -> bool { !no_color() && io::stdout().is_terminal() }
@@ -102,6 +146,7 @@ pub fn result(headline: &str, dry_run: bool, metrics: &[Metric], hints: &[String
 // ── prompts / stdin ───────────────────────────────────────────────────────────
 /// Free-text prompt (to stderr so it doesn't pollute piped stdout).
 pub fn ask(prompt: &str) -> String {
+    restore_term(); // ensure the user sees what they type
     eprint!("{prompt} ");
     let _ = io::stderr().flush();
     let mut s = String::new();
@@ -116,6 +161,7 @@ pub fn stdin_tty() -> bool { io::stdin().is_terminal() }
 
 /// Read a multi-line block pasted on stdin, ending on a blank line or EOF (Ctrl-D).
 pub fn read_block() -> String {
+    restore_term(); // ensure the user sees what they type
     let stdin = io::stdin();
     let mut buf = String::new();
     for line in stdin.lock().lines() {
@@ -134,6 +180,7 @@ pub fn read_block() -> String {
 // ── progress ──────────────────────────────────────────────────────────────────
 /// An indeterminate spinner for opaque long steps (gamdl download).
 pub fn spinner(msg: &str) -> ProgressBar {
+    suppress_echo();
     let pb = mp().add(ProgressBar::new_spinner());
     pb.set_style(ProgressStyle::with_template("{spinner:.blue} {msg} ({elapsed})").unwrap());
     pb.set_message(msg.to_string());
@@ -148,6 +195,7 @@ pub fn bar(len: u64, msg: &str) -> ProgressBar {
     if verbosity() == 0 {
         return ProgressBar::hidden();
     }
+    suppress_echo();
     let pb = mp().add(ProgressBar::new(len));
     // Show time passed and estimated time left, kept easy to tell apart: elapsed
     // is dimmed ("gone"), the ETA is green and prefixed "~…left" ("to go").
@@ -170,7 +218,8 @@ pub fn bar(len: u64, msg: &str) -> ProgressBar {
 /// command's main bar; use `pb.finish_and_clear()` for transient sub-phase bars.
 pub fn finish_done(pb: &ProgressBar) {
     if pb.is_hidden() {
-        return; // --quiet: nothing was drawn
+        restore_term(); // --quiet: nothing drawn, but a spinner may have suppressed
+        return;
     }
     pb.set_style(
         ProgressStyle::with_template(
@@ -184,4 +233,5 @@ pub fn finish_done(pb: &ProgressBar) {
     // so the command's stdout result summary starts on its own line (this is the
     // last bar, so writing the newline directly to stderr won't tear a live bar).
     eprintln!();
+    restore_term();
 }

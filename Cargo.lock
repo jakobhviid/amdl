@@ -87,6 +87,7 @@ dependencies = [
  "blake3",
  "image",
  "indicatif",
+ "libc",
  "lofty",
  "rayon",
  "rookie",

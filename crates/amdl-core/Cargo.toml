@@ -17,3 +17,4 @@ toml = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 ureq = "2"
 blake3 = "1"
+libc = "0.2"
