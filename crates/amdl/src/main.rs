@@ -156,12 +156,16 @@ enum Cmd {
         #[arg(long)]
         force_embed: bool,
         /// Generate *synced* lyrics from plain ones by listening to the track,
-        /// for tracks no source has timed. Needs a running alignment service set
-        /// as `[lyrics] aligner_url` in config (see the amdl-aligner project);
-        /// without it, this just prints setup instructions. Results are marked
-        /// `[re:amdl-align]` and journaled for `undo`.
+        /// for tracks no source has timed. **On by default when `[lyrics]
+        /// aligner_url` is set** (see the amdl-aligner project); this flag only
+        /// matters to request it when no aligner is configured (then it prints
+        /// setup instructions). Results are marked `[re:amdl-align]`, journaled.
         #[arg(long)]
         align: bool,
+        /// Don't run the alignment service even if `aligner_url` is configured
+        /// (skip the Generated-tier last resort; still fetches + upgrades).
+        #[arg(long)]
+        no_align: bool,
     },
     /// Identify tracks by sound (AcoustID fingerprint) to fix untagged/mis-tagged
     /// files. Needs [keys] acoustid (or $ACOUSTID_KEY). --apply writes the match.
@@ -862,14 +866,16 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, align } => {
+        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, align, no_align } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
-            // --align needs a configured alignment service; warn (and no-op the
-            // alignment) if it isn't set up, pointing at the setup docs.
+            // Alignment is on by default once [lyrics] aligner_url is configured;
+            // --no-align opts out, --align requests it explicitly (and, if no
+            // aligner is set up, prints setup instructions and no-ops).
             let aligner_url = cfg.lyrics.aligner_url.clone();
+            let want_align = !no_align && (align || aligner_url.is_some());
             if align && aligner_url.is_none() {
                 ui::warn("--align needs an alignment service, but [lyrics] aligner_url is not set in your config.");
                 ui::info("  Run the service (a GPU box is recommended) and set aligner_url, e.g.:");
@@ -880,7 +886,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 upgrade_synced: !no_upgrade, // upgrade is the default; --no-upgrade opts out
                 embed: embed || force_embed, // --force-embed implies --embed
                 force_embed,
-                align,
+                align: want_align,
             };
             // Optional LrcApi fallback from config (both url + key required).
             let fallback = match (&cfg.lyrics.lrcapi_url, &cfg.lyrics.lrcapi_key) {
