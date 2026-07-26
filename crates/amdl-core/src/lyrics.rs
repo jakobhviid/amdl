@@ -340,7 +340,7 @@ fn best_of(a: Fetched, b: Fetched) -> Fetched {
 /// lrclib.net: try the exact `get` (artist/title/album/duration), then fall back
 /// to `search`. Prefers synced lyrics; reports instrumentals.
 fn fetch_lrclib(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>) -> Fetched {
-    let mut req = ureq::get("https://lrclib.net/api/get")
+    let mut req = crate::http::agent().get("https://lrclib.net/api/get")
         .set("User-Agent", UA)
         .query("artist_name", artist)
         .query("track_name", title);
@@ -355,7 +355,7 @@ fn fetch_lrclib(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>
     }
 
     // Fallback: fuzzy search, take the first usable hit.
-    let search = ureq::get("https://lrclib.net/api/search")
+    let search = crate::http::agent().get("https://lrclib.net/api/search")
         .set("User-Agent", UA)
         .query("track_name", title)
         .query("artist_name", artist)
@@ -379,7 +379,7 @@ fn fetch_lrclib(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>
 /// the `Authorization` header. Returns a JSON array of candidates whose `lyrics`
 /// field is LRC text; take the first synced one, else the first non-empty plain.
 fn fetch_lrcapi(api: &LrcApi, artist: &str, title: &str, album: Option<&str>) -> Fetched {
-    let mut req = ureq::get(&format!("{}/jsonapi", api.url.trim_end_matches('/')))
+    let mut req = crate::http::agent().get(&format!("{}/jsonapi", api.url.trim_end_matches('/')))
         .set("User-Agent", UA)
         .set("Authorization", &api.key)
         .query("title", title)

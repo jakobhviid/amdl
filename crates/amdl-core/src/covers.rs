@@ -292,7 +292,7 @@ fn get_json(req: ureq::Request) -> Option<serde_json::Value> {
 
 /// Fetch an image URL and validate + square-crop it. `None` on any failure.
 fn fetch_cover(url: &str, min_dim: u32) -> Option<Picture> {
-    let resp = ureq::get(url).set("User-Agent", UA).call().ok()?;
+    let resp = crate::http::agent().get(url).set("User-Agent", UA).call().ok()?;
     let mut bytes = Vec::new();
     resp.into_reader().take(20_000_000).read_to_end(&mut bytes).ok()?;
     let mime = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) { MimeType::Png } else { MimeType::Jpeg };
@@ -306,7 +306,7 @@ fn musicbrainz_caa(album: &str, artist: &str, min_dim: u32) -> Option<Picture> {
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let q = format!("release:\"{album}\" AND artist:\"{artist}\"");
     let v = get_json(
-        ureq::get("https://musicbrainz.org/ws/2/release")
+        crate::http::agent().get("https://musicbrainz.org/ws/2/release")
             .query("query", &q)
             .query("fmt", "json")
             .query("limit", "8"),
@@ -337,7 +337,7 @@ fn musicbrainz_caa(album: &str, artist: &str, min_dim: u32) -> Option<Picture> {
 fn itunes(album: &str, artist: &str, min_dim: u32) -> Option<Picture> {
     std::thread::sleep(std::time::Duration::from_millis(200));
     let v = get_json(
-        ureq::get("https://itunes.apple.com/search")
+        crate::http::agent().get("https://itunes.apple.com/search")
             .query("term", &format!("{artist} {album}"))
             .query("entity", "album")
             .query("limit", "12"),
@@ -361,7 +361,7 @@ fn itunes(album: &str, artist: &str, min_dim: u32) -> Option<Picture> {
 fn discogs_cover(album: &str, artist: &str, min_dim: u32, token: &str) -> Option<Picture> {
     std::thread::sleep(std::time::Duration::from_millis(300));
     let v = get_json(
-        ureq::get("https://api.discogs.com/database/search")
+        crate::http::agent().get("https://api.discogs.com/database/search")
             .query("release_title", album)
             .query("artist", artist)
             .query("type", "release")
@@ -439,7 +439,7 @@ pub fn embed_from_url(tracks: &[PathBuf], url: &str, min_dim: u32) -> anyhow::Re
 /// A Spotify album link → its og:image; anything else is treated as a direct URL.
 fn resolve_image_url(url: &str) -> anyhow::Result<String> {
     if url.contains("spotify.com") {
-        let html = ureq::get(url).set("User-Agent", UA).call()?.into_string()?;
+        let html = crate::http::agent().get(url).set("User-Agent", UA).call()?.into_string()?;
         return extract_og_image(&html).ok_or_else(|| anyhow::anyhow!("no og:image on {url}"));
     }
     Ok(url.to_string())

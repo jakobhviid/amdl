@@ -233,7 +233,7 @@ fn grouping_from_sibling(sibling_album: Option<&str>, sibling_album_artist: Opti
 /// remix, or wrong version. If we can't verify (no known duration), we require an
 /// exact normalized-title match instead.
 fn itunes_song_url(term: &str, want_title: &str, want_dur: u64) -> Option<String> {
-    let text = ureq::get("https://itunes.apple.com/search")
+    let text = crate::http::agent().get("https://itunes.apple.com/search")
         .set("User-Agent", UA)
         .query("term", term)
         .query("entity", "song")

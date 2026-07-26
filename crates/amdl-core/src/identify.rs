@@ -198,7 +198,7 @@ fn fingerprint(path: &Path) -> Result<(u64, String)> {
 }
 
 fn lookup(key: &str, duration: u64, fp: &str) -> Result<Option<Match>> {
-    let resp = ureq::post("https://api.acoustid.org/v2/lookup")
+    let resp = crate::http::agent().post("https://api.acoustid.org/v2/lookup")
         .set("User-Agent", UA)
         // POST body (not query) — the fingerprint is too big for a URL.
         .send_form(&[

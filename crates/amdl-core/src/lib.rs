@@ -12,6 +12,7 @@ pub mod covers;
 pub mod dedup;
 pub mod doctor;
 pub mod download;
+pub mod http;
 pub mod identify;
 pub mod journal;
 pub mod lyrics;
