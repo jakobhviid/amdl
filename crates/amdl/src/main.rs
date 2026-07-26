@@ -356,15 +356,28 @@ fn cmd_download(
         }
 
         if no_convert {
+            let mut kept = 0usize;
+            let mut failed = 0usize;
             for t in &tracks {
                 let rel = t.strip_prefix(&work_dir).unwrap_or(t);
                 let dst = out.join(rel);
-                if let Some(p) = dst.parent() {
-                    std::fs::create_dir_all(p).ok();
+                let moved = dst
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|_| std::fs::rename(t, &dst).or_else(|_| std::fs::copy(t, &dst).map(|_| ())));
+                match moved {
+                    Ok(_) => kept += 1,
+                    Err(e) => {
+                        failed += 1;
+                        ui::warn(&format!("could not place {}: {e}", rel.display()));
+                    }
                 }
-                std::fs::rename(t, &dst).or_else(|_| std::fs::copy(t, &dst).map(|_| ())).ok();
             }
-            ui::ok(&format!("kept {} .m4a in {}", tracks.len(), out.display()));
+            if failed > 0 {
+                ui::warn(&format!("kept {kept} .m4a in {} ({failed} failed to move)", out.display()));
+            } else {
+                ui::ok(&format!("kept {kept} .m4a in {}", out.display()));
+            }
         } else {
             let r = convert::convert_files(&tracks, &work_dir, &out, bitrate, jobs)?;
             ui::ok(&format!(
