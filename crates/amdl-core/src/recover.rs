@@ -10,7 +10,7 @@
 //!
 //! Metadata comes from the file's tags, else the folder + filename.
 use crate::{convert, download, tags, ui};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -87,6 +87,16 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
     // Build a cross-library index: (album, title) -> a reference Opus.
     let ref_index = reference_index(&opts.references);
 
+    // Resolve cookies ONCE for the whole online pass. A cookie failure (none in
+    // the browser, expired, unreadable) is structural — nothing online can be
+    // recovered — so surface it now with a non-zero exit instead of silently
+    // dropping every re-acquire into `still_broken` with no explanation.
+    let cookies = if opts.online && !opts.dry_run {
+        Some(crate::cookies::resolve(opts.cookies.clone(), false).context("resolve Apple Music cookies for --online recovery")?)
+    } else {
+        None
+    };
+
     let pb = ui::bar(broken.len() as u64, "Recovering");
     for src in &broken {
         let rel = src.strip_prefix(&opts.source).unwrap_or(src);
@@ -112,16 +122,20 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
         }
 
         // 2. re-acquire via Apple Music (needs --online + cookies)
-        if opts.online && !opts.dry_run {
-            if let Some(artist) = artist.as_deref() {
-                let dir = out.parent().unwrap_or(output).to_path_buf();
-                let want_dur = tags::duration_secs(src).unwrap_or(0);
-                if let Ok(Some(new_files)) = reacquire(&artist_title(artist, &title), &title, want_dur, src, output, opts) {
+        if let (Some(artist), Some(cookies)) = (artist.as_deref(), cookies.as_deref()) {
+            let dir = out.parent().unwrap_or(output).to_path_buf();
+            let want_dur = tags::duration_secs(src).unwrap_or(0);
+            match reacquire(&artist_title(artist, &title), &title, want_dur, src, output, opts, cookies) {
+                Ok(Some(new_files)) => {
                     report.reacquired += 1;
                     report.regrouped += regroup_to_sibling(&new_files, &dir, false);
                     pb.inc(1);
                     continue;
                 }
+                Ok(None) => {} // couldn't resolve/verify this track — falls through to still_broken
+                // Per-track fetch/convert failure: keep going (batch isolation),
+                // but say why under -v so it isn't a silent drop.
+                Err(e) => ui::detail(&format!("re-acquire failed: {title} — {e}")),
             }
         }
 
@@ -148,14 +162,13 @@ fn artist_title(artist: &str, title: &str) -> String {
 /// if the track couldn't be resolved/fetched. The candidate is verified against
 /// `want_title` + `want_dur` first — a blank recovery beats a wrong recording, and
 /// getting it wrong is now worse because the file is then regrouped into the album.
-fn reacquire(term: &str, want_title: &str, want_dur: u64, src: &Path, output: &Path, opts: &Opts) -> Result<Option<Vec<PathBuf>>> {
+fn reacquire(term: &str, want_title: &str, want_dur: u64, src: &Path, output: &Path, opts: &Opts, cookies: &Path) -> Result<Option<Vec<PathBuf>>> {
     let Some(url) = itunes_song_url(term, want_title, want_dur) else {
         return Ok(None);
     };
-    let cookies = crate::cookies::resolve(opts.cookies.clone(), false)?;
     std::fs::create_dir_all(&opts.work_dir)?;
     let dl = download::Opts {
-        cookies,
+        cookies: cookies.to_path_buf(),
         storefronts: opts.storefronts.clone(),
         output: opts.work_dir.clone(),
         artist_auto: false,
