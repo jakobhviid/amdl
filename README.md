@@ -110,7 +110,7 @@ amdl <command> [options]
 | `convert [src] [dest]` | Transcode `.m4a`/`.mp3`/`.flac` → Opus with **fidelity**: re-embeds the source cover as a real `METADATA_BLOCK_PICTURE`, strips iTunes junk, mirrors `.lrc`, skip-existing (resumable). Paths default to config. |
 | `doctor [output]` | Health/integrity scan: missing covers/tags, unreadable, and — with `--source` — **truncated** (decoded vs source duration) + **unconverted** source files. `--deep` full-decodes every Opus to catch **corruption** with no source needed. |
 | `covers [output]` | Backfill missing covers — funnel: source → cross-library (`--reference`) → `--online` waterfall (MB/CAA→iTunes→Discogs) → `--paste` human tail (or `--paste-file` for scripts). Validated + square-cropped, per album, artist+album-gated. `--dry-run`. |
-| `lyrics [output]` | LRCLIB backfill — write synced (preferred) or plain `.lrc` into the library. State-only, skip-existing. |
+| `lyrics [output]` | LRCLIB backfill — write synced (preferred) or plain `.lrc` into the library. State-only, skip-existing. `--upgrade-synced` re-times existing **plain** files when LRCLIB has a synced version (journaled for `undo`). |
 | `tag <path>` | Set tags across a file/folder — `--compilation` groups a Various-Artists album (`albumartist=Various Artists` + `compilation=1`); also `--album/--artist/--album-artist`. `--dry-run`. |
 | `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |
 | `identify <path>` | Fix untagged/mis-tagged tracks by **sound** (AcoustID fingerprint via `fpcalc`); `--apply` writes artist/title/album only at/above `--min-score` (default 0.9 — a wrong tag is worse than none). `--dry-run`, `--skip-tagged`. Needs `[keys] acoustid`. |

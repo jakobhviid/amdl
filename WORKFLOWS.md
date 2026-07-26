@@ -55,10 +55,25 @@ only into the output, so it's safe when the source is read-only.
 
 ```sh
 amdl lyrics /music/lib
-amdl lyrics /music/lib --json   # {ok_synced, ok_plain, not_found, instrumental, no_meta, skipped}
+amdl lyrics /music/lib --json   # {ok_synced, ok_plain, upgraded, not_found, instrumental, no_meta, skipped}
 ```
 
 A large `not_found` count is normal for niche/Danish catalogs — not a failure.
+
+**Upgrade plain → synced (`--upgrade-synced`).** By default an existing `.lrc` is
+skipped on sight, so a library that was backfilled before its tracks had timed
+lyrics on LRCLIB stays *plain* forever. `--upgrade-synced` re-queries every
+existing **plain** (untimed) `.lrc` and, only when LRCLIB now has a **synced**
+version, replaces it (already-synced files and tracks with no synced match are
+left untouched). Each replacement is journaled, so `amdl undo` restores the old
+`.lrc`. It re-hits the network per plain file, so it's opt-in rather than the
+default cheap re-run.
+
+```sh
+amdl lyrics /music/lib --upgrade-synced          # timed lyrics where they now exist
+amdl lyrics /music/lib --upgrade-synced --json    # `upgraded` counts the plain→synced replacements
+amdl undo                                         # revert an upgrade run (restores the plain .lrc files)
+```
 
 ### tag — compilation grouping
 

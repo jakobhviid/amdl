@@ -4,6 +4,10 @@
 //! output library, so the read-only source is never touched. Skip-existing,
 //! per-file error isolation, parallel. Large `not_found` counts are normal for
 //! niche/Danish catalogs — that's not a failure.
+//!
+//! With `upgrade` on, an existing *plain* (untimed) `.lrc` is re-queried and
+//! replaced when LRCLIB has a synced version; the old bytes are journaled so
+//! `undo` can restore them. Already-synced files are still skipped.
 use crate::{tags, ui};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -16,6 +20,9 @@ const UA: &str = concat!("amdl/", env!("CARGO_PKG_VERSION"), " (https://github.c
 pub struct Report {
     pub ok_synced: usize,
     pub ok_plain: usize,
+    /// Existing *plain* `.lrc` files replaced with a synced version from LRCLIB
+    /// (only counted when `upgrade` is on).
+    pub upgraded: usize,
     pub not_found: usize,
     pub instrumental: usize,
     pub no_meta: usize,
@@ -29,7 +36,7 @@ enum Fetched {
     NotFound,
 }
 
-pub fn backfill(output: &Path, jobs: usize) -> Report {
+pub fn backfill(output: &Path, jobs: usize, upgrade: bool) -> Report {
     let files = list_audio(output);
     if files.is_empty() {
         return Report::default();
@@ -44,17 +51,32 @@ pub fn backfill(output: &Path, jobs: usize) -> Report {
         files.par_iter().for_each(|f| {
             let lrc = f.with_extension("lrc");
             if lrc.exists() {
-                c.skipped.fetch_add(1, Ordering::Relaxed);
+                // Existing sidecar: normally skip. With `upgrade`, a *plain* .lrc
+                // is re-queried and replaced iff LRCLIB has a synced version.
+                let existing = std::fs::read(&lrc).unwrap_or_default();
+                if !upgrade || is_synced(&existing) {
+                    c.skipped.fetch_add(1, Ordering::Relaxed);
+                    pb.inc(1);
+                    return;
+                }
+                match fetch_for(f) {
+                    Some(Fetched::Synced(s)) if upgrade_lrc(&lrc, &existing, &s) => {
+                        c.upgraded.fetch_add(1, Ordering::Relaxed);
+                    }
+                    // Only synced upgrades a plain file; anything else leaves it as-is.
+                    _ => {
+                        c.skipped.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 pb.inc(1);
                 return;
             }
-            let b = tags::read_basic(f);
-            let (Some(artist), Some(title)) = (b.artist.clone(), b.title.clone()) else {
+            let Some(fetched) = fetch_for(f) else {
                 c.no_meta.fetch_add(1, Ordering::Relaxed);
                 pb.inc(1);
                 return;
             };
-            match fetch(&artist, &title, b.album.as_deref(), tags::duration_secs(f)) {
+            match fetched {
                 Fetched::Synced(s) => {
                     if write_lrc(&lrc, &s) {
                         c.ok_synced.fetch_add(1, Ordering::Relaxed);
@@ -77,6 +99,40 @@ pub fn backfill(output: &Path, jobs: usize) -> Report {
     });
     pb.finish_and_clear();
     c.into_report()
+}
+
+/// Read a file's basic tags and fetch LRCLIB lyrics for it. `None` means the
+/// file lacks the artist+title needed to query (the caller's `no_meta` case).
+fn fetch_for(f: &Path) -> Option<Fetched> {
+    let b = tags::read_basic(f);
+    let (artist, title) = (b.artist?, b.title?);
+    Some(fetch(&artist, &title, b.album.as_deref(), tags::duration_secs(f)))
+}
+
+/// True if the `.lrc` carries at least one `[mm:ss]` timestamp tag — i.e. it's
+/// synced. Metadata-only tags like `[ar:…]`/`[length:…]` start with a letter, so
+/// they don't count; a plain lyric file has no bracketed timestamps at all.
+fn is_synced(lrc: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(lrc) else { return false };
+    text.lines().any(|line| {
+        let Some(rest) = line.trim_start().strip_prefix('[') else { return false };
+        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        digits > 0 && rest[digits..].starts_with(':')
+    })
+}
+
+/// Overwrite an existing plain `.lrc` with synced content, backing up the old
+/// bytes for `undo`. Returns false (no change recorded) if the content is
+/// identical or the write fails.
+fn upgrade_lrc(path: &Path, old: &[u8], synced: &str) -> bool {
+    if synced.as_bytes() == old {
+        return false;
+    }
+    if std::fs::write(path, synced).is_err() {
+        return false;
+    }
+    crate::journal::replaced(path, old);
+    true
 }
 
 fn write_lrc(path: &Path, content: &str) -> bool {
@@ -155,6 +211,7 @@ fn classify(v: &serde_json::Value) -> Fetched {
 struct Counters {
     ok_synced: AtomicUsize,
     ok_plain: AtomicUsize,
+    upgraded: AtomicUsize,
     not_found: AtomicUsize,
     instrumental: AtomicUsize,
     no_meta: AtomicUsize,
@@ -165,6 +222,7 @@ impl Counters {
         Report {
             ok_synced: self.ok_synced.into_inner(),
             ok_plain: self.ok_plain.into_inner(),
+            upgraded: self.upgraded.into_inner(),
             not_found: self.not_found.into_inner(),
             instrumental: self.instrumental.into_inner(),
             no_meta: self.no_meta.into_inner(),
@@ -190,5 +248,28 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
                 out.push(p);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_synced;
+
+    #[test]
+    fn synced_detects_timestamp_tags() {
+        assert!(is_synced(b"[00:12.34]a line\n[00:15.00]another"));
+        assert!(is_synced(b"[01:02]no centiseconds is still timed"));
+        // A synced file usually carries metadata tags before the first timestamp.
+        assert!(is_synced(b"[ar:Artist]\n[ti:Title]\n[00:01.00]first sung line"));
+    }
+
+    #[test]
+    fn plain_and_metadata_only_are_not_synced() {
+        assert!(!is_synced(b"just a plain lyric\nsecond line, no timing"));
+        assert!(!is_synced(b"")); // empty
+        // Metadata tags start with a letter, not digits — not a timestamp.
+        assert!(!is_synced(b"[ar:Rick Astley]\n[length:03:33]\nplain words here"));
+        // A leading bracket with no digit-then-colon is not a timestamp.
+        assert!(!is_synced(b"[chorus]\nwords"));
     }
 }

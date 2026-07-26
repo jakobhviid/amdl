@@ -48,12 +48,18 @@ enum Entry {
     Create { path: PathBuf, hash: String },
     /// A file amdl edited in place; undo restores `before` if it still hashes to `after`.
     Restore { path: PathBuf, before: Snapshot, after: String },
+    /// A non-audio file amdl overwrote wholesale (e.g. an `.lrc` upgraded to
+    /// synced); undo rewrites the old bytes (stored under `objects/` as `before`)
+    /// if the file still hashes to `after`.
+    RestoreBytes { path: PathBuf, before: String, after: String },
 }
 
 impl Entry {
     fn path(&self) -> &Path {
         match self {
-            Entry::Create { path, .. } | Entry::Restore { path, .. } => path,
+            Entry::Create { path, .. }
+            | Entry::Restore { path, .. }
+            | Entry::RestoreBytes { path, .. } => path,
         }
     }
 }
@@ -91,6 +97,24 @@ pub fn created(path: &Path) {
     }
 }
 
+/// Record that `path`'s raw bytes were replaced wholesale (e.g. an `.lrc`
+/// upgraded to synced). Pass the file's *old* bytes; they're backed into
+/// `objects/` and undo rewrites them if the file still hashes to its new state.
+/// For tiny sidecars like `.lrc` a full-content backup is cheap. Best-effort:
+/// a backup/hash failure is swallowed rather than breaking the command.
+pub fn replaced(path: &Path, before: &[u8]) {
+    if !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let before_hash = hash_bytes(before);
+    if store_object(&before_hash, before).is_err() {
+        return;
+    }
+    if let Ok(after) = hash_file(path) {
+        push(Entry::RestoreBytes { path: abs(path), before: before_hash, after });
+    }
+}
+
 /// Wrap an in-place edit of `path`: snapshot its tags first, run `f`, then record
 /// the inverse. A no-op (just runs `f`) when journaling is off. Snapshot/record
 /// failures are swallowed — undo is best-effort and must never break the command.
@@ -108,7 +132,8 @@ pub fn edit<T, E>(path: &Path, f: impl FnOnce() -> std::result::Result<T, E>) ->
             // deletes it); a file already Restored keeps its *original* snapshot.
             match j.entries.iter_mut().find(|e| e.path() == ap.as_path()) {
                 Some(Entry::Create { hash, .. }) => *hash = after,
-                Some(Entry::Restore { after: a, .. }) => *a = after,
+                Some(Entry::Restore { after: a, .. })
+                | Some(Entry::RestoreBytes { after: a, .. }) => *a = after,
                 None => {
                     if let Some(before) = before {
                         j.entries.push(Entry::Restore { path: ap, before, after });
@@ -227,6 +252,15 @@ fn revert(e: &Entry, dry_run: bool) -> Result<bool> {
             }
             if !dry_run {
                 restore(path, before)?;
+            }
+            Ok(true)
+        }
+        Entry::RestoreBytes { path, before, after } => {
+            if !path.exists() || hash_file(path)? != *after {
+                return Ok(false); // gone or changed since — skip
+            }
+            if !dry_run {
+                std::fs::write(path, read_object(before)?)?;
             }
             Ok(true)
         }
@@ -372,10 +406,16 @@ fn gc_objects() -> Result<()> {
     for r in list_runs() {
         if let Ok(m) = read_manifest(&r.path) {
             for e in &m.entries {
-                if let Entry::Restore { before, .. } = e {
-                    if let Some(h) = &before.picture {
-                        referenced.insert(h.clone());
+                match e {
+                    Entry::Restore { before, .. } => {
+                        if let Some(h) = &before.picture {
+                            referenced.insert(h.clone());
+                        }
                     }
+                    Entry::RestoreBytes { before, .. } => {
+                        referenced.insert(before.clone());
+                    }
+                    Entry::Create { .. } => {}
                 }
             }
         }

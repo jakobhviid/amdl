@@ -131,6 +131,11 @@ enum Cmd {
         /// Parallel lookups (LRCLIB tolerates ~10).
         #[arg(short, long, default_value_t = 8)]
         jobs: usize,
+        /// Also upgrade existing *plain* (untimed) .lrc files to synced when
+        /// LRCLIB has a timed version. Already-synced files are left untouched;
+        /// each replacement is journaled for `undo`.
+        #[arg(long)]
+        upgrade_synced: bool,
     },
     /// Identify tracks by sound (AcoustID fingerprint) to fix untagged/mis-tagged
     /// files. Needs [keys] acoustid (or $ACOUSTID_KEY). --apply writes the match.
@@ -764,22 +769,23 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs } => {
+        Cmd::Lyrics { output, jobs, upgrade_synced } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
-            let r = lyrics::backfill(&output, jobs);
+            let r = lyrics::backfill(&output, jobs, upgrade_synced);
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
                 use ui::Tone::{Dim, Good};
                 ui::result(
-                    &format!("lyrics · {} written", r.ok_synced + r.ok_plain),
+                    &format!("lyrics · {} written", r.ok_synced + r.ok_plain + r.upgraded),
                     false,
                     &[
                         ui::tally("synced", r.ok_synced, Good),
                         ui::tally("plain", r.ok_plain, Good),
+                        ui::tally("upgraded", r.upgraded, Good),
                         ui::tally("not-found", r.not_found, Dim),
                         ui::tally("instrumental", r.instrumental, Dim),
                         ui::tally("no-meta", r.no_meta, Dim),
