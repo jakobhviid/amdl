@@ -3,6 +3,7 @@
 //!   - **unreadable** (won't probe),
 //!   - **missing_cover** (no embedded picture),
 //!   - **missing_tags** (no artist/title/album),
+//!
 //! and, when a `source` tree is given for comparison:
 //!   - **truncated** (decoded Opus duration vs the source's differ > ~1.5 s — the
 //!     silent damage a killed run leaves behind, which skip-existing would hide),

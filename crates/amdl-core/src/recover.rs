@@ -7,6 +7,7 @@
 //!      tracks, so this beats a fresh DRM download.
 //!   2. **re-acquire** (`--online`) — resolve the track on Apple Music (iTunes
 //!      search by artist+title, duration-matched) → gamdl → convert → place.
+//!
 //! Metadata comes from the file's tags, else the folder + filename.
 use crate::{convert, download, tags, ui};
 use anyhow::Result;
@@ -205,9 +206,11 @@ fn regroup_to_sibling(new_files: &[PathBuf], dir: &Path, dry_run: bool) -> usize
         if tags::read_basic(f).album.as_deref() == Some(album.as_str()) {
             continue;
         }
-        if dry_run {
-            n += 1;
-        } else if crate::journal::edit(f, || tags::set_album_grouping(f, &album, compilation)).is_ok() {
+        // dry-run counts the regroup without touching the file; otherwise it's
+        // counted only if the tag write actually succeeds.
+        let changed = dry_run
+            || crate::journal::edit(f, || tags::set_album_grouping(f, &album, compilation)).is_ok();
+        if changed {
             n += 1;
         }
     }

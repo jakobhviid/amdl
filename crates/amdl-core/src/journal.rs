@@ -196,7 +196,7 @@ pub fn undo(id: Option<&str>, dry_run: bool) -> Result<UndoReport> {
     let run = match id {
         Some(id) => runs.into_iter().find(|r| r.id == id),
         None => {
-            runs.sort_by(|a, b| b.started_unix.cmp(&a.started_unix));
+            runs.sort_by_key(|r| std::cmp::Reverse(r.started_unix));
             runs.into_iter().next()
         }
     };
@@ -227,7 +227,7 @@ pub fn undo(id: Option<&str>, dry_run: bool) -> Result<UndoReport> {
 /// The recent runs, newest first.
 pub fn list() -> Vec<RunInfo> {
     let mut runs = list_runs();
-    runs.sort_by(|a, b| b.started_unix.cmp(&a.started_unix));
+    runs.sort_by_key(|r| std::cmp::Reverse(r.started_unix));
     runs
 }
 
@@ -393,7 +393,7 @@ fn read_object(hash: &str) -> Result<Vec<u8>> {
 /// Keep the newest `KEEP_RUNS`, delete older runs, then GC unreferenced objects.
 fn prune() -> Result<()> {
     let mut runs = list_runs();
-    runs.sort_by(|a, b| b.started_unix.cmp(&a.started_unix));
+    runs.sort_by_key(|r| std::cmp::Reverse(r.started_unix));
     for r in runs.into_iter().skip(KEEP_RUNS) {
         std::fs::remove_dir_all(&r.path).ok();
     }

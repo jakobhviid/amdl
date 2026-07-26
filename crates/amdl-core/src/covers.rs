@@ -8,6 +8,7 @@
 //!   4. paste-a-URL tail (`--paste`) — whatever's still uncovered is a numbered,
 //!      most-tracks-first straggler list; the operator pastes one image/Spotify URL
 //!      per album and it's embedded across every track of that album.
+//!
 //! Covers are applied per *album* (normalized title, so multi-disc sets and
 //! editions group), and every embedded image is validated (decodes, min edge)
 //! and square-cropped.

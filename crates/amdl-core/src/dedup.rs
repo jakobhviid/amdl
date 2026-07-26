@@ -11,6 +11,7 @@
 //!   - **subset editions** — a raw edition whose track set is a strict subset of
 //!     another edition of the *same* release (e.g. Standard ⊂ Deluxe). Multi-disc
 //!     sets are safe: their discs have disjoint track sets, so neither is a subset.
+//!
 //! This tier is heuristic; the report labels it so.
 use crate::covers::norm_album;
 use crate::{tags, ui};
