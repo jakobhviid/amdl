@@ -123,7 +123,7 @@ pub fn run(path: &Path, key: &str, opts: &Opts) -> Result<Report> {
             })
             .collect()
     });
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
 
     let mut report = Report { total: files.len(), dry_run: opts.dry_run, ..Default::default() };
     for (rel, out) in outcomes {

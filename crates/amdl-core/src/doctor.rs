@@ -113,7 +113,7 @@ pub fn scan(output: &Path, source: Option<&Path>, deep: bool) -> Health {
             (name, fs)
         })
         .collect();
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
 
     for (name, fs) in findings {
         for f in fs {

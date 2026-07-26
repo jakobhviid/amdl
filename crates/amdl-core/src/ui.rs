@@ -163,3 +163,25 @@ pub fn bar(len: u64, msg: &str) -> ProgressBar {
     pb.enable_steady_tick(Duration::from_millis(90));
     pb
 }
+
+/// Finish a determinate bar **leaving it on screen**, completed, with the total
+/// time it took ("… finished in 3m") shown in place of the live elapsed/ETA — so
+/// the duration of a whole-library command stays visible after it ends. Use for a
+/// command's main bar; use `pb.finish_and_clear()` for transient sub-phase bars.
+pub fn finish_done(pb: &ProgressBar) {
+    if pb.is_hidden() {
+        return; // --quiet: nothing was drawn
+    }
+    pb.set_style(
+        ProgressStyle::with_template(
+            "  {msg} {pos}/{len} [{bar:24.green/green}] finished in {elapsed:.green}",
+        )
+        .unwrap()
+        .progress_chars("=>-"),
+    );
+    pb.finish();
+    // The persisted bar leaves the cursor at the end of its line; advance past it
+    // so the command's stdout result summary starts on its own line (this is the
+    // last bar, so writing the newline directly to stderr won't tear a live bar).
+    eprintln!();
+}

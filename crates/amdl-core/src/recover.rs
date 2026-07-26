@@ -133,7 +133,7 @@ pub fn run(output: &Path, opts: &Opts) -> Result<Report> {
         ));
         pb.inc(1);
     }
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
     report.still_broken.sort();
     Ok(report)
 }

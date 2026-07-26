@@ -62,7 +62,7 @@ pub fn run(path: &Path, edit: &Edit, dry_run: bool) -> Report {
         }
         pb.inc(1);
     });
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
     report.changed = changed.into_inner();
     report.failed = failed.into_inner();
     report

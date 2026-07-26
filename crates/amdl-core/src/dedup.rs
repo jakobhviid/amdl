@@ -95,7 +95,7 @@ pub fn run(output: &Path) -> Report {
             }
         })
         .collect();
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
 
     report.exact_duplicates = exact_duplicates(&tracks);
     report.subset_editions = subset_editions(&tracks);

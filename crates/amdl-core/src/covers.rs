@@ -172,7 +172,7 @@ pub fn backfill(output: &Path, opts: &Opts) -> Report {
         }
         pb.inc(1);
     }
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
 
     // Impact-sorted, then numbered.
     stragglers.sort_by(|a, b| b.tracks.cmp(&a.tracks).then(a.album.cmp(&b.album)));

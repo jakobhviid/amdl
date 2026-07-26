@@ -88,7 +88,7 @@ pub fn convert_files(
             pb.inc(1);
         });
     });
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
     Ok(Report {
         converted: conv.into_inner(),
         copied: copied.into_inner(),

@@ -84,7 +84,7 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
             pb.inc(1);
         });
     });
-    pb.finish_and_clear();
+    ui::finish_done(&pb);
     c.into_report()
 }
 
