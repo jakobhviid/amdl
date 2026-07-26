@@ -214,6 +214,13 @@ enum Cmd {
         #[arg(long)]
         init: bool,
     },
+    /// Get/set/delete individual config settings (scriptable). Every write
+    /// re-renders the full annotated config.toml, so its inline help is kept.
+    /// Run `amdl configure keys` for every settable key.
+    Configure {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Re-acquire broken/missing tracks (source files that never produced an
     /// Opus): cross-library copy from --reference, else re-acquire via gamdl
     /// (--online). Metadata from tags, else folder+filename.
@@ -273,6 +280,33 @@ enum Cmd {
     /// Print a man page (roff) to stdout.
     #[command(hide = true)]
     Man,
+}
+
+/// Sub-actions of `amdl configure` — the scriptable settings surface. Keys are
+/// dotted `section.field` (e.g. `lyrics.aligner_url`); see `configure keys`.
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Set (or update) a setting: `configure set lyrics.aligner_url http://192.168.1.6:8790`.
+    Set {
+        /// Dotted key, e.g. `paths.output` (see `configure keys`).
+        key: String,
+        /// New value. Booleans take `true`/`false`; use `unset` to clear a setting.
+        value: String,
+    },
+    /// Delete a setting, reverting it to unset/default: `configure unset lyrics.aligner_url`.
+    Unset {
+        /// Dotted key to clear (see `configure keys`).
+        key: String,
+    },
+    /// Print one setting's current value (nothing if unset) — for scripts.
+    Get {
+        /// Dotted key to read (see `configure keys`).
+        key: String,
+    },
+    /// List every setting with its current value (`--json` for a machine object).
+    List,
+    /// List every settable key with a one-line description.
+    Keys,
 }
 
 fn cwd() -> PathBuf {
@@ -967,7 +1001,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                     if let Some(parent) = p.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    std::fs::write(&p, config::EXAMPLE)?;
+                    std::fs::write(&p, config::template())?;
                     ui::ok(&format!("wrote {}", p.display()));
                 }
             } else {
@@ -984,6 +1018,62 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                     ui::info(&format!("config: {}{}", p.display(), if p.exists() { "" } else { " (not created)" }));
                     println!("  source: {}", show(cfg.paths.source));
                     println!("  output: {}", show(cfg.paths.output));
+                }
+            }
+            Ok(())
+        }
+        Cmd::Configure { action } => {
+            let as_err = |e: String| anyhow::anyhow!(e);
+            match action {
+                ConfigAction::Set { key, value } => {
+                    let mut cfg = config::load_strict().map_err(as_err)?;
+                    config::set_value(&mut cfg, &key, &value).map_err(as_err)?;
+                    config::save(&cfg)?;
+                    ui::ok(&format!("{key} = {value}"));
+                    ui::info(&format!("wrote {}", config::path().display()));
+                }
+                ConfigAction::Unset { key } => {
+                    let mut cfg = config::load_strict().map_err(as_err)?;
+                    config::unset_value(&mut cfg, &key).map_err(as_err)?;
+                    config::save(&cfg)?;
+                    ui::ok(&format!("unset {key}"));
+                }
+                ConfigAction::Get { key } => {
+                    let cfg = config::load_strict().map_err(as_err)?;
+                    let val = config::get_value(&cfg, &key).map_err(as_err)?;
+                    if json {
+                        println!("{}", serde_json::json!({ "key": key, "value": val }));
+                    } else if let Some(v) = val {
+                        // Bare value, no decoration, so `$(amdl configure get …)` composes.
+                        println!("{v}");
+                    }
+                }
+                ConfigAction::List => {
+                    let cfg = config::load_strict().map_err(as_err)?;
+                    if json {
+                        let mut map = serde_json::Map::new();
+                        for (key, _) in config::KEYS {
+                            let v = config::get_value(&cfg, key).map_err(as_err)?;
+                            map.insert((*key).to_string(), v.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+                        }
+                        println!("{}", serde_json::to_string_pretty(&serde_json::Value::Object(map))?);
+                    } else {
+                        ui::info(&format!("config: {}", config::path().display()));
+                        for (key, _) in config::KEYS {
+                            let v = config::get_value(&cfg, key).map_err(as_err)?;
+                            println!("  {key} = {}", v.unwrap_or_else(|| "(unset)".into()));
+                        }
+                    }
+                }
+                ConfigAction::Keys => {
+                    if json {
+                        let arr: Vec<_> = config::KEYS.iter().map(|(k, d)| serde_json::json!({ "key": k, "description": d })).collect();
+                        println!("{}", serde_json::to_string_pretty(&arr)?);
+                    } else {
+                        for (key, desc) in config::KEYS {
+                            println!("  {key:<22} {desc}");
+                        }
+                    }
                 }
             }
             Ok(())

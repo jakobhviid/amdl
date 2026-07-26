@@ -113,6 +113,7 @@ amdl <command> [options]
 | `lyrics [output]` | LRCLIB backfill — write synced (preferred) or plain `.lrc` **sidecars** into the library. State-only. **By default** it fetches missing lyrics *and* re-times existing **plain** files to synced when a source has them; `--no-upgrade` does the cheap fill-gaps-only pass. `--embed` also writes lyrics into the audio file's `LYRICS` tag (sidecar kept; never downgrades a synced embed unless `--force-embed`). An optional [LrcApi](https://github.com/HisAtri/LrcApi)-compatible secondary server (`[lyrics]` in config) supplies synced lyrics lrclib.net lacks. Alignment (a self-hosted [amdl-aligner](https://github.com/jakobhviid/amdl-aligner) service, `aligner_url` in config) *generates* synced lyrics from plain ones by listening to the track, for the residue no source has timed — including tracks whose only lyrics live in the `LYRICS` tag (marked `[re:amdl-align]`); it runs **by default once `aligner_url` is set**, `--no-align` opts out. All journaled for `undo`. |
 | `tag <path>` | Set tags across a file/folder — `--compilation` groups a Various-Artists album (`albumartist=Various Artists` + `compilation=1`); also `--album/--artist/--album-artist`. `--dry-run`. |
 | `config [--init]` | Show the config path + values; `--init` writes a starter `~/.config/amdl/config.toml`. |
+| `configure <set\|unset\|get\|list\|keys>` | Read/write individual settings programmatically (scriptable), e.g. `configure set lyrics.aligner_url http://…`, `configure unset …`, `configure get paths.output`. Every write re-renders the full annotated `config.toml`, so its inline help is always preserved. `configure keys` lists every settable key. |
 | `identify <path>` | Fix untagged/mis-tagged tracks by **sound** (AcoustID fingerprint via `fpcalc`); `--apply` writes artist/title/album only at/above `--min-score` (default 0.9 — a wrong tag is worse than none). `--dry-run`, `--skip-tagged`. Needs `[keys] acoustid`. |
 | `recover [output]` | Re-acquire tracks a source never converted: cross-library copy from `--reference`, else `--online` re-acquire via gamdl (verified on title+duration). Recovered tracks are **regrouped** to their album siblings (so they don't split out under Apple's own album tag). `--dry-run`. |
 | `dedup [output]` | **Surface** (never delete) redundant tracks: exact-duplicate recordings + subset editions (Standard ⊂ Deluxe), with paths to remove and which copy to keep. `--print-rm` emits `rm` lines for you to review. |
@@ -134,6 +135,7 @@ the source.
 
 ```sh
 amdl config --init                         # optional: set default source/output once
+amdl configure set paths.output ~/Music/lib   # ...or set settings programmatically (scriptable)
 amdl convert ~/Music/originals ~/Music/lib # m4a/mp3 → Opus (covers, lyrics, junk-stripped)
 amdl doctor ~/Music/lib --source ~/Music/originals   # what still needs fixing
 amdl doctor ~/Music/lib --json | jq '.truncated'     # feed a script/agent
