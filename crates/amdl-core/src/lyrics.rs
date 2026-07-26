@@ -386,10 +386,20 @@ impl Counters {
     }
 }
 
-fn list_audio(dir: &Path) -> Vec<PathBuf> {
+fn is_audio(p: &Path) -> bool {
+    matches!(p.extension().and_then(|e| e.to_str()), Some("opus") | Some("m4a") | Some("mp3"))
+}
+
+/// Collect audio files under `root`. `root` may be a **single audio file** (act
+/// on just it) or a **directory** (recurse) — same as `tag`/`identify`, so an
+/// agent can target one track (e.g. `lyrics song.opus --force-embed`).
+fn list_audio(root: &Path) -> Vec<PathBuf> {
+    if root.is_file() {
+        return if is_audio(root) { vec![root.to_path_buf()] } else { Vec::new() };
+    }
     let mut out = Vec::new();
-    walk(dir, &mut out);
-    out.retain(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("opus") | Some("m4a") | Some("mp3")));
+    walk(root, &mut out);
+    out.retain(|p| is_audio(p));
     out.sort();
     out
 }

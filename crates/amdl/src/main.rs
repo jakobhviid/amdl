@@ -127,15 +127,23 @@ enum Cmd {
     /// Backfill .lrc lyrics from LRCLIB (synced preferred). Writes into the
     /// library only (state-only); skip-existing.
     Lyrics {
-        /// Library to backfill (default: config [paths] output).
+        /// Library dir *or* a single audio file to backfill (default: config
+        /// [paths] output). A file acts on just that track — handy for a
+        /// targeted `lyrics song.opus --force-embed`.
         output: Option<PathBuf>,
         /// Parallel lookups (LRCLIB tolerates ~10).
         #[arg(short, long, default_value_t = 8)]
         jobs: usize,
-        /// Also upgrade existing *plain* (untimed) .lrc files to synced when
-        /// LRCLIB has a timed version. Already-synced files are left untouched;
-        /// each replacement is journaled for `undo`.
+        /// Don't re-time existing plain .lrc files: only fetch what's missing and
+        /// skip anything already present (the cheap pass — no network for existing
+        /// sidecars). By default `lyrics` also upgrades plain .lrc to synced when a
+        /// source has a timed version (journaled for `undo`; already-synced files
+        /// are left untouched either way).
         #[arg(long)]
+        no_upgrade: bool,
+        /// Deprecated: plain→synced upgrading is the default now, so this is a
+        /// no-op kept for compatibility. Use `--no-upgrade` to opt out.
+        #[arg(long, hide = true)]
         upgrade_synced: bool,
         /// Also embed each track's lyrics into its audio file's LYRICS tag (the
         /// .lrc sidecar is kept). Embeds existing sidecars and freshly-fetched
@@ -847,13 +855,13 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs, upgrade_synced, embed, force_embed } => {
+        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
             let opts = lyrics::Options {
-                upgrade_synced,
+                upgrade_synced: !no_upgrade, // upgrade is the default; --no-upgrade opts out
                 embed: embed || force_embed, // --force-embed implies --embed
                 force_embed,
             };

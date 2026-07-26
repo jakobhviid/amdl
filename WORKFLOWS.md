@@ -50,12 +50,14 @@ wait
 ### lyrics — LRCLIB backfill (state-only)
 
 For every track missing a sibling `.lrc`, fetch synced (preferred) or plain
-lyrics and write the `.lrc` into the library. Skip-existing, parallel; writes
-only into the output, so it's safe when the source is read-only.
+lyrics and write the `.lrc` into the library. **And by default, re-time any
+existing *plain* `.lrc` to synced** when a source now has a timed version — so
+one command both fills gaps and upgrades. Parallel; writes only into the output,
+so it's safe when the source is read-only.
 
 ```sh
-amdl lyrics /music/lib
-amdl lyrics /music/lib --json   # {ok_synced, ok_plain, upgraded, embedded, not_found, instrumental, no_meta, skipped}
+amdl lyrics /music/lib             # fetch missing + upgrade plain→synced (default)
+amdl lyrics /music/lib --json      # {ok_synced, ok_plain, upgraded, embedded, not_found, instrumental, no_meta, skipped}
 ```
 
 A large `not_found` count is normal for niche/Danish catalogs — not a failure.
@@ -65,20 +67,22 @@ A large `not_found` count is normal for niche/Danish catalogs — not a failure.
 player that reads a same-name `.lrc` picks them up) and keeps writes
 non-destructive. See `--embed` below for lyrics that travel *inside* the file.
 
-**Upgrade plain → synced (`--upgrade-synced`).** By default an existing `.lrc` is
-skipped on sight, so a library that was backfilled before its tracks had timed
-lyrics on LRCLIB stays *plain* forever. `--upgrade-synced` re-queries every
-existing **plain** (untimed) `.lrc` and, only when LRCLIB now has a **synced**
-version, replaces it (already-synced files and tracks with no synced match are
-left untouched). Each replacement is journaled, so `amdl undo` restores the old
-`.lrc`. It re-hits the network per plain file, so it's opt-in rather than the
-default cheap re-run.
+**The default upgrades; `--no-upgrade` opts out.** Upgrading re-queries every
+existing **plain** (untimed) `.lrc` and replaces it only when a source has a
+**synced** version (already-synced files and tracks with no synced match are left
+untouched; each replacement is journaled, so `amdl undo` restores the old `.lrc`).
+Because it re-hits the network per plain file, pass `--no-upgrade` for the cheap,
+idempotent pass that just fills gaps and skips everything already on disk — ideal
+for a quick "any new tracks?" run over a large library.
 
 ```sh
-amdl lyrics /music/lib --upgrade-synced          # timed lyrics where they now exist
-amdl lyrics /music/lib --upgrade-synced --json    # `upgraded` counts the plain→synced replacements
-amdl undo                                         # revert an upgrade run (restores the plain .lrc files)
+amdl lyrics /music/lib                 # default: fill gaps AND upgrade plain→synced
+amdl lyrics /music/lib --no-upgrade    # cheap: fill gaps only, skip all existing .lrc (no network for them)
+amdl undo                              # revert a run (restores any replaced .lrc)
 ```
+
+(`--upgrade-synced` is still accepted as a no-op alias, since upgrading is now the
+default.)
 
 **Embed lyrics into the file (`--embed`).** Sidecars don't travel: copy a track
 to a phone/DAP/car or hand someone a single file and the `.lrc` is left behind.
@@ -94,11 +98,11 @@ is left untouched and identical content is never rewritten. To overwrite anyway
 (e.g. replace a synced embed, or re-embed hand-edited lyrics) pass `--force-embed`.
 
 ```sh
-amdl lyrics /music/lib --embed                   # embed every track's .lrc (sidecar kept)
-amdl lyrics /music/lib --upgrade-synced --embed   # upgrade sidecars to synced, then embed them
-amdl lyrics /music/lib --embed --json             # `embedded` counts the tags written
-amdl lyrics /music/lib --force-embed              # overwrite even a synced embed (implies --embed)
-amdl undo                                         # revert an embed run (restores the prior tag)
+amdl lyrics /music/lib --embed                   # fetch + upgrade + embed (upgrade is on by default)
+amdl lyrics /music/lib --embed --no-upgrade      # embed existing/just-fetched, but don't re-time plain sidecars
+amdl lyrics /music/lib --embed --json            # `embedded` counts the tags written
+amdl lyrics /music/lib --force-embed             # overwrite even a synced embed (implies --embed)
+amdl undo                                        # revert an embed run (restores the prior tag)
 ```
 
 Serving from **Navidrome** (or similar) reads either form off the output tree, so
@@ -120,7 +124,7 @@ lrcapi_key  = "…"                               # sent verbatim as the Authori
 
 Both `lrcapi_url` and `lrcapi_key` are required to enable it; `lrcapi_first` (default
 `false`) flips which source is primary/queried-first. This applies to plain
-`lyrics`, `--upgrade-synced`, and `--embed` alike — they all fetch through the same
+`lyrics` (default), `--no-upgrade`, and `--embed` alike — they all fetch through the same
 source chain.
 
 ### tag — compilation grouping
