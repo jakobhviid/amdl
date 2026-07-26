@@ -10,6 +10,7 @@
 //!   - **source_without_opus** (a source file that never produced an Opus =
 //!     conversion failure / damaged original).
 use crate::{tags, ui};
+use anyhow::{bail, Result};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -70,7 +71,16 @@ fn source_for(opus: &Path, output: &Path, source: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn scan(output: &Path, source: Option<&Path>, deep: bool) -> Health {
+pub fn scan(output: &Path, source: Option<&Path>, deep: bool) -> Result<Health> {
+    // ffprobe backs every duration/readability check — without it *every* file
+    // would look `unreadable`. `--deep` also needs ffmpeg, and without it the
+    // decode check silently reports zero corruption. Fail loudly, like convert.
+    if which("ffprobe").is_none() {
+        bail!("ffprobe not found on PATH — `brew install ffmpeg` (provides ffprobe)");
+    }
+    if deep && which("ffmpeg").is_none() {
+        bail!("--deep needs ffmpeg for the full-decode check — `brew install ffmpeg`");
+    }
     let opus = list_ext(output, "opus");
     let mut health = Health {
         total: opus.len(),
@@ -151,7 +161,13 @@ pub fn scan(output: &Path, source: Option<&Path>, deep: bool) -> Health {
     health.truncated.sort();
     health.corrupt.sort();
     health.source_without_opus.sort();
-    health
+    Ok(health)
+}
+
+fn which(bin: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths).map(|d| d.join(bin)).find(|p| p.is_file())
+    })
 }
 
 /// A full decode with no errors on stderr (`-v error`). ffmpeg can exit 0 while

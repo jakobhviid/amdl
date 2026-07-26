@@ -955,7 +955,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 .or(cfg.paths.output)
                 .context("no output dir — pass one or set [paths] output in ~/.config/amdl/config.toml")?;
             let source = source.or(cfg.paths.source);
-            let h = doctor::scan(&output, source.as_deref(), deep);
+            let h = doctor::scan(&output, source.as_deref(), deep)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&h)?);
             } else {
