@@ -1,6 +1,6 @@
 [package]
 name = "amdl"
-description = "Music-library harness: validate, transcode to Opus, tag, cover, and keep a library consistent. Wraps gamdl + ffmpeg."
+description = "Audio Metadata & Lyrics Maintainer: unify a mixed-format music library to Opus and keep its tags, cover art, and synced lyrics complete and consistent. Optional acquisition via gamdl + ffmpeg."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

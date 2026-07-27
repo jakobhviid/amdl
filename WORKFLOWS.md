@@ -58,6 +58,10 @@ Transcode a source tree to Opus. Covers are re-embedded as real
 `.lrc` sidecars are mirrored into the output. Skip-existing makes it resumable —
 re-running costs nothing for already-converted files.
 
+*Resumability trap:* a run killed mid-file can leave a half-written `.opus` that
+*looks* done, so skip-existing won't retry it — `doctor` catches these by
+duration (W3).
+
 ```sh
 amdl convert /music/originals /music/lib          # explicit paths
 amdl convert                                       # uses config [paths]
@@ -218,10 +222,6 @@ amdl tag <path> --compilation --dry-run                          # preview
 ```
 
 Applies to every audio file under the path; existing tags are preserved.
-
-*Resumability:* if a run dies mid-way, just run the same command again —
-finished files are skipped. The one trap this creates — a half-written `.opus`
-that *looks* done — is caught by `doctor` (W3).
 
 ---
 
@@ -502,11 +502,49 @@ files*:
 - Read-only commands (`doctor`, `dedup`, report-only `identify`, any `--dry-run`)
   are always safe to run concurrently with anything.
 
-## Scope — acquisition vs. the harness
+## Acquiring tracks (optional) — `download`, `cookies`
+
+amdl is a *maintainer*, not a downloader — everything above operates on files you
+already have. As a convenience it can also front
+[`gamdl`](https://github.com/glomatico/gamdl): fetch a URL and run the result
+straight through the convert pipeline, so acquiring and processing are one
+command. This is the only command that acquires the *audio itself* (the
+enrichment commands — covers/lyrics/identify — hit the network too, but only for
+metadata). If you already have the files, ignore this section.
+
+```sh
+amdl download 'https://music.apple.com/dk/album/…' -o /music/lib   # fetch → validate → Opus
+amdl download 'https://…' --no-convert                              # keep the raw .m4a, skip transcode
+amdl download 'https://…' --json                                    # machine-readable report
+```
+
+Useful flags: `-o/--out` (target library; default: cwd), `--bitrate`, `-j/--jobs`,
+`--storefront` (default `dk`) and `--fallback` (default `us,gb`),
+`--work-dir`/`--keep-work` for the intermediate `.m4a`. `recover --online` (W6)
+reuses this same path to re-acquire only the tracks a source never produced.
+
+**Cookies.** gamdl needs an Apple Music login session; amdl resolves one in order:
+`--cookies <file>` (or `$AMDL_COOKIES_FILE`) → `$AMDL_COOKIES` (raw cookie text,
+for headless/CI) → gamdl's own `~/.gamdl/cookies.txt` if unexpired →
+auto-extracted from an installed browser (Chrome/Chromium/Firefox/Brave/Vivaldi/
+Edge/Arc, and Safari on macOS). If none are found or they look expired, it points
+you to re-log-in at <https://music.apple.com>. Inspect what it would use, without
+downloading anything:
+
+```sh
+amdl cookies            # report the resolved cookie source
+amdl cookies --json     # ...machine-readable
+```
+
+amdl never writes to `~/.gamdl`; browser cookies are cached under `~/.cache/amdl/`.
+Acquisition specifics — codecs, DRM, storefronts, login quirks, download failures
+— are gamdl's domain, per Scope below.
+
+## Scope — acquisition vs. maintenance
 
 amdl's job starts *after* the files exist. Acquisition (codecs, DRM, storefronts,
 login, download failures) is **gamdl's** domain — take those to the gamdl team.
 Likewise, *serving* the finished library is your media server's job: point
 Navidrome (or whatever) at the **output** Opus tree (never the read-only source)
-and let it scan — amdl deliberately stays a self-contained file harness and does
-not reach across the network into a server it doesn't own.
+and let it scan — amdl deliberately stays a self-contained, local file maintainer
+and does not reach across the network into a server it doesn't own.
