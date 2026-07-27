@@ -4,10 +4,14 @@ class Amdl < Formula
   version "@VERSION@"
   license "MIT"
 
-  # Prebuilt x86_64 Linux bottle so `brew install` pours it (no C compiler);
-  # other platforms fall back to the url+install path below.
+  # Prebuilt bottles so `brew install` pours (no C compiler / Xcode gate):
+  # macOS on both arches, plus x86_64 Linux. Anything without a matching bottle
+  # — e.g. a macOS older than the build runner, or arm64 Linux — falls back to
+  # the url+install path below.
   bottle do
     root_url "https://github.com/jakobhviid/amdl/releases/download/v@VERSION@"
+    sha256 cellar: :any_skip_relocation, arm64_@MAC_CODENAME@: "@MAC_ARM_BOTTLE_SHA@"
+    sha256 cellar: :any_skip_relocation, @MAC_CODENAME@: "@MAC_X86_BOTTLE_SHA@"
     sha256 cellar: :any_skip_relocation, x86_64_linux: "@BOTTLE_SHA@"
   end
 
