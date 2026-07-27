@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Tolerance for the truncation check (seconds).
-const DURATION_TOLERANCE: f64 = 1.5;
+/// A derived Opus whose decoded duration differs from its source by more than
+/// this many seconds is reported `truncated`. Documented in WORKFLOWS.md (W2).
+pub const DURATION_TOLERANCE: f64 = 1.5;
 
 #[derive(Debug, Default, Serialize)]
 pub struct Health {

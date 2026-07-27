@@ -456,7 +456,9 @@ fn fetch_lrclib(artist: &str, title: &str, album: Option<&str>, dur: Option<u64>
 
 /// Tolerance (seconds) for matching a fallback lyric candidate's duration to the
 /// file's. Wide enough for DB rounding, tight enough to reject a different song.
-const DURATION_TOL: f64 = 5.0;
+/// A fuzzy lyric match is accepted only if the candidate's duration is within
+/// this many seconds of the file. Documented in WORKFLOWS.md (W1 instrumentals).
+pub const DURATION_TOL: f64 = 5.0;
 
 /// Whether a fuzzy `/api/search` candidate actually belongs to this file. The
 /// strong signal is duration (a different recording differs by more than a few
