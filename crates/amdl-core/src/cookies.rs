@@ -83,7 +83,7 @@ pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
 fn prompt_paste() -> Result<Option<PathBuf>> {
     if !ui::stdin_tty() {
         // Non-interactive (piped/headless with no TTY): can't prompt.
-        // On a server, pass `--cookies -` to pipe a cookies file instead.
+        // On a server, set $AMDL_COOKIES (raw cookie text) or pass --cookies <file>.
         return Ok(None);
     }
     let ans = ui::ask("No browser cookies. Paste a Netscape cookies.txt instead? [y/N]:");

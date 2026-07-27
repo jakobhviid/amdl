@@ -9,8 +9,7 @@ decades of MP3s, m4a, and CD rips with patchy tags into one uniform, enriched
 library — standardized to space-efficient **Opus**, with complete tags, cover
 art, and synced lyrics — then keeps it consistent as it grows (`doctor`,
 `dedup`, `recover`, `undo`), so it feels great in a self-hosted server like
-[Navidrome](https://www.navidrome.org/). [`gamdl`](https://github.com/glomatico/gamdl)
-+ `ffmpeg` handle optional acquisition.
+[Navidrome](https://www.navidrome.org/).
 
 **Composable by design.** All logic lives in the reusable **`amdl-core`** crate,
 and every batch command can emit machine-readable **`--json`**, so scripts and
