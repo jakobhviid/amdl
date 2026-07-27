@@ -66,10 +66,24 @@ jobs:
           mkdir -p dist
           tar czf "dist/amdl-${{ matrix.target }}.tar.gz" \
             -C "target/${{ matrix.target }}/release" amdl
+      - name: Emit Homebrew bottle tag (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # macos-latest is Apple Silicon, so the host tag is like "arm64_sequoia".
+          # Its codename drives both the arm64 and the (cross-built) Intel bottle
+          # tag. brew's developer-mode notice goes to stderr; the tag is on stdout.
+          host=$(brew ruby -e 'puts Utils::Bottles.tag.to_s' 2>/dev/null)
+          codename=${host#arm64_}
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) tag="arm64_${codename}" ;;
+            x86_64-apple-darwin)  tag="${codename}" ;;
+          esac
+          printf '%s' "$tag" > "dist/${{ matrix.target }}.bottletag"
+          echo "bottle tag: $tag"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: dist/*
 
   release:
     needs: build
@@ -89,24 +103,48 @@ jobs:
           # Same Conventional-Commit semver as the stamp step (kept in sync).
           VERSION=$(git log --reverse --format='%H%x09%s' | awk -F'\t' 'BEGIN{maj=1;min=0;pat=0}{s=$2;if(s~/^[A-Za-z]+(\([^)]*\))?!:/){maj++;min=0;pat=0}else if(s~/^feat(\([^)]*\))?:/){min++;pat=0}else{pat++}}END{print maj"."min"."pat}')
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          # Repackage the prebuilt x86_64 Linux binary as a Homebrew bottle so
-          # `brew install` POURS it (no build-from-source, no C compiler gate).
-          # A poured bottle skips the formula's `install`, so the keg must already
-          # hold what install produces: binary + man page + completions.
-          keg="amdl/${VERSION}"
-          bin="bottlestage/${keg}/bin"
-          man="bottlestage/${keg}/share/man/man1"
-          zc="bottlestage/${keg}/share/zsh/site-functions"
-          bc="bottlestage/${keg}/share/bash-completion/completions"
-          fc="bottlestage/${keg}/share/fish/vendor_completions.d"
-          rm -rf bottlestage && mkdir -p "$bin" "$man" "$zc" "$bc" "$fc"
-          tar xzf art/amdl-x86_64-unknown-linux-musl.tar.gz -C "$bin"
-          "$bin/amdl" man > "$man/amdl.1"
-          "$bin/amdl" completions zsh  > "$zc/_amdl"
-          "$bin/amdl" completions bash > "$bc/amdl"
-          "$bin/amdl" completions fish > "$fc/amdl.fish"
-          ( cd bottlestage && tar czf "../art/amdl-${VERSION}.x86_64_linux.bottle.tar.gz" amdl )
-          echo "BOTTLE_SHA=$(sha256sum "art/amdl-${VERSION}.x86_64_linux.bottle.tar.gz" | awk '{print $1}')" >> "$GITHUB_ENV"
+
+          # Repackage the prebuilt binaries as Homebrew bottles so `brew install`
+          # POURS them (no build-from-source, no C compiler / Xcode gate). A poured
+          # bottle skips the formula's `install`, so each keg must already hold what
+          # install produces: binary + man page + completions. man/completions are
+          # generated CLI text (identical on every platform), so render them once
+          # from the Linux binary and reuse them in the macOS kegs too.
+          tmp=$(mktemp -d)
+          tar xzf art/amdl-x86_64-unknown-linux-musl.tar.gz -C "$tmp"
+          "$tmp/amdl" man              > "$tmp/amdl.1"
+          "$tmp/amdl" completions zsh  > "$tmp/_amdl"
+          "$tmp/amdl" completions bash > "$tmp/amdl.bash"
+          "$tmp/amdl" completions fish > "$tmp/amdl.fish"
+
+          # make_bottle <binary-tarball-in-art> <homebrew-tag> -> prints sha256
+          make_bottle() {
+            keg="amdl/${VERSION}"
+            root="stage-$2"
+            rm -rf "$root"
+            mkdir -p "$root/$keg/bin" \
+                     "$root/$keg/share/man/man1" \
+                     "$root/$keg/share/zsh/site-functions" \
+                     "$root/$keg/share/bash-completion/completions" \
+                     "$root/$keg/share/fish/vendor_completions.d"
+            tar xzf "art/$1" -C "$root/$keg/bin"
+            cp "$tmp/amdl.1"    "$root/$keg/share/man/man1/amdl.1"
+            cp "$tmp/_amdl"     "$root/$keg/share/zsh/site-functions/_amdl"
+            cp "$tmp/amdl.bash" "$root/$keg/share/bash-completion/completions/amdl"
+            cp "$tmp/amdl.fish" "$root/$keg/share/fish/vendor_completions.d/amdl.fish"
+            ( cd "$root" && tar czf "../art/amdl-${VERSION}.$2.bottle.tar.gz" amdl )
+            sha256sum "art/amdl-${VERSION}.$2.bottle.tar.gz" | awk '{print $1}'
+          }
+
+          ARM_TAG=$(cat art/aarch64-apple-darwin.bottletag)
+          X86_TAG=$(cat art/x86_64-apple-darwin.bottletag)
+          {
+            echo "BOTTLE_SHA=$(make_bottle amdl-x86_64-unknown-linux-musl.tar.gz x86_64_linux)"
+            echo "MAC_ARM_BOTTLE_SHA=$(make_bottle amdl-aarch64-apple-darwin.tar.gz "$ARM_TAG")"
+            echo "MAC_X86_BOTTLE_SHA=$(make_bottle amdl-x86_64-apple-darwin.tar.gz "$X86_TAG")"
+            echo "MAC_CODENAME=${ARM_TAG#arm64_}"
+          } >> "$GITHUB_ENV"
+
           gh release create "v$VERSION" art/*.tar.gz \
             --title "v$VERSION" --notes "Automated build from ${GITHUB_SHA:0:7}" \
             || gh release upload "v$VERSION" art/*.tar.gz --clobber
@@ -132,7 +170,10 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes"
           sha() { sha256sum "art/amdl-$1.tar.gz" | awk '{print $1}'; }
           sed -e "s/@VERSION@/${VERSION}/g" \
+            -e "s/@MAC_CODENAME@/${MAC_CODENAME}/g" \
             -e "s/@BOTTLE_SHA@/${BOTTLE_SHA}/g" \
+            -e "s/@MAC_ARM_BOTTLE_SHA@/${MAC_ARM_BOTTLE_SHA}/g" \
+            -e "s/@MAC_X86_BOTTLE_SHA@/${MAC_X86_BOTTLE_SHA}/g" \
             -e "s/@X86_SHA@/$(sha x86_64-unknown-linux-musl)/g" \
             -e "s/@ARM_SHA@/$(sha aarch64-unknown-linux-musl)/g" \
             -e "s/@MAC_X86_SHA@/$(sha x86_64-apple-darwin)/g" \
