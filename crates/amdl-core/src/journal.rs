@@ -23,7 +23,9 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How many recent runs to retain before pruning the oldest.
-const KEEP_RUNS: usize = 25;
+/// How many recent undo runs are retained before older ones are pruned.
+/// Documented in WORKFLOWS.md (W8).
+pub const KEEP_RUNS: usize = 25;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static JOURNAL: Mutex<Option<Journal>> = Mutex::new(None);

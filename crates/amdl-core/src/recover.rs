@@ -41,6 +41,10 @@ pub struct Report {
 
 const UA: &str = concat!("amdl/", env!("CARGO_PKG_VERSION"), " (https://github.com/jakobhviid/amdl)");
 
+/// A re-acquired candidate is accepted only if its duration is within this many
+/// seconds of the broken track's. Documented in WORKFLOWS.md (W6 / confidence gates).
+pub const DURATION_TOL_SECS: u64 = 3;
+
 /// (normalized album, normalized title)
 type Key = (String, String);
 
@@ -283,7 +287,7 @@ fn recording_matches(want_title: &str, want_dur: u64, cand_title: &str, cand_dur
     }
     match (want_dur, cand_dur) {
         (0, _) => w == c,                                   // can't verify → demand exact title
-        (want, Some(cand)) => want.abs_diff(cand) <= 3,     // known duration → gate on it
+        (want, Some(cand)) => want.abs_diff(cand) <= DURATION_TOL_SECS, // known duration → gate on it
         (_, None) => w == c,                                // candidate has no duration → exact title
     }
 }

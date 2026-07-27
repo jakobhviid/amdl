@@ -23,6 +23,10 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
+/// Default minimum acceptable cover edge in px (the `covers --min-dim` default);
+/// smaller images are rejected as placeholder art. Documented in WORKFLOWS.md (W4).
+pub const DEFAULT_MIN_EDGE_PX: u32 = 250;
+
 pub struct Opts {
     /// Read-only source tree to copy embedded art from (pass 1).
     pub source: Option<PathBuf>,
