@@ -47,12 +47,6 @@ class Amdl < Formula
     (man1/"amdl.1").write Utils.safe_popen_read(bin/"amdl", "man")
   end
 
-  def caveats
-    "Acquisition is handled by gamdl — install/configure it per its own terms. " \
-      "amdl auto-detects Apple Music cookies from your browser (Safari/Chrome/Firefox/…); " \
-      "on a headless host, pass them with `--cookies -`."
-  end
-
   test do
     assert_match "amdl", shell_output("#{bin}/amdl --help")
   end
