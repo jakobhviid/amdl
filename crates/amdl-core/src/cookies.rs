@@ -11,7 +11,7 @@
 //! passed to gamdl via --cookies-path.
 use crate::ui;
 use serde::Serialize;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,6 +24,18 @@ const BROWSER_LIST: &str = "Chrome, Chromium, Firefox, Brave, Brave Origin, Viva
 pub fn resolve(explicit: Option<PathBuf>, refresh: bool) -> Result<PathBuf> {
     if !refresh {
         if let Some(p) = explicit {
+            // `--cookies -` : read a Netscape cookies.txt from stdin (headless/CI,
+            // no file on disk), same handling as $AMDL_COOKIES.
+            if p == Path::new("-") {
+                ui::info("Reading cookies from stdin (--cookies -)");
+                let mut raw = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)
+                    .context("reading cookies from stdin")?;
+                if let Some(path) = store_pasted(&raw)? {
+                    return Ok(path);
+                }
+                bail!("--cookies - : no apple.com cookies found on stdin");
+            }
             if !p.is_file() {
                 bail!("--cookies {} does not exist", p.display());
             }

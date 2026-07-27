@@ -28,9 +28,6 @@ struct Cli {
     /// Verbose: also list per-item detail (every affected file) under the summary.
     #[arg(short, long, global = true)]
     verbose: bool,
-    /// Don't journal this run for `amdl undo` (skips the undo safety net).
-    #[arg(long, global = true)]
-    no_undo: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -39,12 +36,16 @@ struct Cli {
 enum Cmd {
     /// Fetch URL(s) via gamdl, then validate → Opus into your library.
     Download {
+        /// Don't journal this run for `amdl undo` (skips the undo safety net).
+        #[arg(long)]
+        no_undo: bool,
         /// Source URL(s), fetched via gamdl.
         urls: Vec<String>,
         /// Output library (default: current directory).
         #[arg(short, long)]
         out: Option<PathBuf>,
-        /// Cookies file (or set $AMDL_COOKIES_FILE; default: auto-detect from your browser).
+        /// Cookies file, or `-` to read cookie text from stdin (also honors
+        /// $AMDL_COOKIES_FILE / $AMDL_COOKIES; default: auto-detect from your browser).
         #[arg(long, env = "AMDL_COOKIES_FILE")]
         cookies: Option<PathBuf>,
         /// Scratch dir for gamdl output (default: a temp dir).
@@ -71,6 +72,9 @@ enum Cmd {
     },
     /// Transcode an existing library of .m4a/.mp3 to Opus (source → output).
     Convert {
+        /// Don't journal this run for `amdl undo` (skips the undo safety net).
+        #[arg(long)]
+        no_undo: bool,
         /// Source library root, read-only (default: config [paths] source).
         src: Option<PathBuf>,
         /// Output/derived library (default: config [paths] output, else cwd).
@@ -105,6 +109,9 @@ enum Cmd {
     /// Backfill missing Opus cover art: copy from source, then cross-library
     /// (--reference). Prints a numbered straggler list for albums still uncovered.
     Covers {
+        /// Don't journal this run for `amdl undo` (skips the undo safety net).
+        #[arg(long)]
+        no_undo: bool,
         /// Output/derived library to fill (default: config [paths] output).
         output: Option<PathBuf>,
         /// Source tree to copy embedded art from (default: config [paths] source).
@@ -134,6 +141,9 @@ enum Cmd {
     /// Backfill .lrc lyrics from LRCLIB (synced preferred). Writes into the
     /// library only (state-only); skip-existing.
     Lyrics {
+        /// Don't journal this run for `amdl undo` (skips the undo safety net).
+        #[arg(long)]
+        no_undo: bool,
         /// Library dir *or* a single audio file to backfill (default: config
         /// [paths] output). A file acts on just that track — handy for a
         /// targeted `lyrics song.opus --force-embed`.
@@ -183,6 +193,9 @@ enum Cmd {
     /// Identify tracks by sound (AcoustID fingerprint) to fix untagged/mis-tagged
     /// files. Needs [keys] acoustid (or $ACOUSTID_KEY). --apply writes the match.
     Identify {
+        /// Don't journal this run for `amdl undo` (skips the undo safety net).
+        #[arg(long)]
+        no_undo: bool,
         /// File or directory to identify.
         path: PathBuf,
         /// Write the resolved artist/title/album (default: report only).
@@ -203,6 +216,9 @@ enum Cmd {
     /// Set tags across a file/folder. `--compilation` groups a Various-Artists
     /// album (albumartist=Various Artists + compilation=1); also set album/artist.
     Tag {
+        /// Don't journal this run for `amdl undo` (skips the undo safety net).
+        #[arg(long)]
+        no_undo: bool,
         /// File or directory to retag (all audio under a dir).
         path: PathBuf,
         /// Group as a Various-Artists compilation.
@@ -239,6 +255,9 @@ enum Cmd {
     /// Opus): cross-library copy from --reference, else re-acquire via gamdl
     /// (--online). Metadata from tags, else folder+filename.
     Recover {
+        /// Don't journal this run for `amdl undo` (skips the undo safety net).
+        #[arg(long)]
+        no_undo: bool,
         /// Output/derived library (default: config [paths] output).
         output: Option<PathBuf>,
         /// Source tree to detect missing/broken against (default: config [paths] source).
@@ -250,7 +269,8 @@ enum Cmd {
         /// Re-acquire tracks no reference has, via gamdl (needs cookies).
         #[arg(long)]
         online: bool,
-        /// Cookies for re-acquisition (or $AMDL_COOKIES_FILE).
+        /// Cookies for re-acquisition — a file, or `-` to read from stdin (also
+        /// honors $AMDL_COOKIES_FILE / $AMDL_COOKIES).
         #[arg(long, env = "AMDL_COOKIES_FILE")]
         cookies: Option<PathBuf>,
         /// Opus bitrate for re-acquired tracks (default: config, else 192k).
@@ -940,7 +960,7 @@ fn main() -> Result<()> {
     ui::set_verbosity(if cli.quiet { 0 } else if cli.verbose { 2 } else { 1 });
     let json = cli.json;
     // Journal mutating runs so `amdl undo` can revert them (unless --no-undo).
-    if is_mutating(&cli.cmd) && !cli.no_undo {
+    if is_mutating(&cli.cmd) && !no_undo_flag(&cli.cmd) {
         journal::begin(std::env::args().collect());
     }
     let outcome = dispatch(cli.cmd, json);
@@ -957,9 +977,23 @@ fn is_mutating(cmd: &Cmd) -> bool {
     )
 }
 
+/// Read the per-command `--no-undo` flag (mutating commands only; false otherwise).
+fn no_undo_flag(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::Download { no_undo, .. }
+        | Cmd::Convert { no_undo, .. }
+        | Cmd::Covers { no_undo, .. }
+        | Cmd::Lyrics { no_undo, .. }
+        | Cmd::Tag { no_undo, .. }
+        | Cmd::Identify { no_undo, .. }
+        | Cmd::Recover { no_undo, .. } => *no_undo,
+        _ => false,
+    }
+}
+
 fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
     match cmd {
-        Cmd::Download { urls, out, cookies, work_dir, keep_work, bitrate, jobs, storefront, fallback, no_convert } => {
+        Cmd::Download { no_undo: _, urls, out, cookies, work_dir, keep_work, bitrate, jobs, storefront, fallback, no_convert } => {
             let cfg = config::load();
             let out = out.or(cfg.paths.output).unwrap_or_else(cwd);
             let bitrate = bitrate.or(cfg.convert.bitrate).unwrap_or_else(|| "192k".into());
@@ -977,7 +1011,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 no_convert,
             )
         }
-        Cmd::Convert { src, dest, bitrate, jobs } => {
+        Cmd::Convert { no_undo: _, src, dest, bitrate, jobs } => {
             let cfg = config::load();
             let src = src
                 .or(cfg.paths.source)
@@ -1037,7 +1071,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Covers { output, source, reference, online, paste, paste_file, dry_run, min_dim } => {
+        Cmd::Covers { no_undo: _, output, source, reference, online, paste, paste_file, dry_run, min_dim } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
@@ -1066,7 +1100,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Lyrics { output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, no_align, mark_instrumental, unmark_instrumental } => {
+        Cmd::Lyrics { no_undo: _, output, jobs, no_upgrade, upgrade_synced: _, embed, force_embed, no_align, mark_instrumental, unmark_instrumental } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())
@@ -1134,7 +1168,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Identify { path, apply, dry_run, min_score, skip_tagged } => {
+        Cmd::Identify { no_undo: _, path, apply, dry_run, min_score, skip_tagged } => {
             let cfg = config::load();
             let key = cfg
                 .keys
@@ -1150,7 +1184,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Tag { path, compilation, album, album_artist, artist, dry_run } => {
+        Cmd::Tag { no_undo: _, path, compilation, album, album_artist, artist, dry_run } => {
             let edit = retag::Edit { compilation, album, album_artist, artist };
             if edit.is_noop() {
                 ui::warn("nothing to set — pass --compilation and/or --album/--artist/--album-artist");
@@ -1260,7 +1294,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Recover { output, source, reference, online, cookies, bitrate, dry_run } => {
+        Cmd::Recover { no_undo: _, output, source, reference, online, cookies, bitrate, dry_run } => {
             let cfg = config::load();
             let output = output
                 .or(cfg.paths.output.clone())

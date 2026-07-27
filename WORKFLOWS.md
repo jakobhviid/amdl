@@ -36,6 +36,11 @@ amdl configure list --json                            # all keys → values, mac
 amdl configure unset lyrics aligner_url               # delete a setting (revert to its default)
 ```
 
+(`lyrics hints` in the examples above toggles the lyric *tips* amdl prints — e.g.
+the suggestion to set up an alignment server when none is configured; `off`
+silences them. It changes no library data. `amdl configure keys` gives a one-line
+description of every settable key.)
+
 Every write **re-renders the whole `config.toml` from one template**, so the
 inline help for *all* settings is preserved no matter which values are set — the
 file stays self-documenting after any `configure set`. Unknown keys and bad
@@ -528,8 +533,9 @@ Useful flags: `-o/--out` (target library; default: cwd), `--bitrate`, `-j/--jobs
 reuses this same path to re-acquire only the tracks a source never produced.
 
 **Cookies.** gamdl needs an Apple Music login session; amdl resolves one in order:
-`--cookies <file>` (or `$AMDL_COOKIES_FILE`) → `$AMDL_COOKIES` (raw cookie text,
-for headless/CI) → gamdl's own `~/.gamdl/cookies.txt` if unexpired →
+`--cookies <file>` (or `-` to read the cookie text from stdin, or
+`$AMDL_COOKIES_FILE`) → `$AMDL_COOKIES` (raw cookie text, for headless/CI) →
+gamdl's own `~/.gamdl/cookies.txt` if unexpired →
 auto-extracted from an installed browser (Chrome/Chromium/Firefox/Brave/Vivaldi/
 Edge/Arc, and Safari on macOS). If none are found or they look expired, it points
 you to re-log-in at <https://music.apple.com>. Inspect what it would use, without

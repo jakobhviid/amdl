@@ -152,6 +152,7 @@ environment variable:
 
 ```sh
 amdl download --cookies /path/cookies.txt 'https://music.apple.com/…'
+cat cookies.txt | amdl download --cookies - 'https://music.apple.com/…'   # pipe via stdin
 export AMDL_COOKIES_FILE=/path/cookies.txt      # same, as an env var
 export AMDL_COOKIES="$(cat cookies.txt)"        # or the cookie text itself (no file)
 ```

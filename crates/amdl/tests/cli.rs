@@ -98,6 +98,35 @@ fn tag_edit_then_undo_restores_every_field() {
 }
 
 #[test]
+fn no_undo_is_per_command_not_global() {
+    let (dir, home, undo) = (TempDir::new().unwrap(), TempDir::new().unwrap(), TempDir::new().unwrap());
+    let f = fixture_copy(dir.path());
+    // Read-only commands have nothing to journal, so they must NOT accept --no-undo.
+    amdl(home.path(), undo.path()).args(["doctor", "--no-undo"]).assert().failure();
+    amdl(home.path(), undo.path())
+        .args(["stats", dir.path().to_str().unwrap(), "--no-undo"]).assert().failure();
+    // A mutating command accepts it (offline: mark-instrumental just stamps a tag).
+    amdl(home.path(), undo.path())
+        .args(["lyrics", f.to_str().unwrap(), "--no-undo", "--mark-instrumental"]).assert().success();
+}
+
+#[test]
+fn cookies_dash_reads_from_stdin() {
+    let (home, undo) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    // `--cookies -` reads cookie text from stdin. With no apple.com cookies in the
+    // input, resolution fails with the stdin-specific message — and offline, it
+    // never reaches gamdl/network, so this stays deterministic.
+    let out = amdl(home.path(), undo.path())
+        .args(["download", "--cookies", "-", "https://music.apple.com/dk/album/x/123"])
+        .write_stdin("garbage cookie text\n")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "garbage stdin cookies should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--cookies -"), "expected the stdin cookie path, got: {err}");
+}
+
+#[test]
 fn mark_instrumental_then_undo() {
     let (dir, home, undo) = (TempDir::new().unwrap(), TempDir::new().unwrap(), TempDir::new().unwrap());
     let f = fixture_copy(dir.path());
