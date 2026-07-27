@@ -352,8 +352,8 @@ amdl identify /music/lib --json | jq '.results[] | select(.matched)'
 ```
 
 `--apply` never writes a match below `--min-score` (default 0.9) — a wrong tag is
-worse than none, the same rule covers/dedup follow; those show up as `low-score`
-in the report. `--skip-tagged` makes a large untagged-folder run resumable (it's
+worse than none, and covers applies the same gate; those show up as
+`skipped_low_score` in the report. `--skip-tagged` makes a large untagged-folder run resumable (it's
 opt-in because identify also *fixes* mis-tagged files, which have tags). Then hand
 the now-tagged album to `covers` for its art.
 
@@ -409,7 +409,9 @@ subset tier is heuristic and labelled as such; review before removing anything.
 
 Every mutating command is **journaled by default**, so you can revert it. Undo
 deletes files amdl created (convert/lyrics/recover) and restores tags/covers it
-changed (tag/identify/covers/paste/regroup/embed).
+changed (tag/identify/covers/paste/regroup/embed). It only reverts amdl's *own*
+actions: files **you** delete yourself — the `rm` in W3, or acting on
+`dedup --print-rm` — are not journaled and cannot be restored by `undo`.
 
 On a terminal, a bare `amdl undo` opens an **interactive picker** — recent runs
 listed newest-first with a relative date, the command, and how many files each
@@ -495,8 +497,10 @@ command's `--help`/source for the full shape rather than inferring it.
 amdl takes **no file locks**. Parallelism is safe only when jobs touch *different
 files*:
 
-- `convert` (writes `.opus`) and `lyrics` (writes `.lrc`) over the same library
-  are safe — disjoint file types (W1).
+- `convert` (writes `.opus`) and plain `lyrics` (writes `.lrc`) over the same
+  library are safe — disjoint file types (W1). **Exception:** `lyrics --embed`
+  writes the `.opus` `LYRICS` tag, so it is *not* disjoint from `convert` — never
+  run `--embed` alongside a `convert` into the same library.
 - Two commands that write the **same** output files (e.g. two `convert`s, or
   `convert` and `covers`, into one library) are **not** guarded — serialize them.
 - Read-only commands (`doctor`, `dedup`, report-only `identify`, any `--dry-run`)
