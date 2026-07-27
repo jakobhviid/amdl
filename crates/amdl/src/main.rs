@@ -14,7 +14,7 @@ const AFTER_HELP: &str = concat!(
 );
 
 #[derive(Parser)]
-#[command(name = "amdl", version, about = "Music-library harness: validate, transcode to Opus, and keep your library consistent (wraps gamdl + ffmpeg).", after_help = AFTER_HELP, after_long_help = AFTER_HELP, arg_required_else_help = true)]
+#[command(name = "amdl", version, about = "Audio Metadata & Lyrics Maintainer: unify a mixed-format music library to Opus, then keep its tags, cover art, and synced lyrics complete and consistent (optional acquisition via gamdl + ffmpeg).", after_help = AFTER_HELP, after_long_help = AFTER_HELP, arg_required_else_help = true)]
 struct Cli {
     /// Emit machine-readable JSON instead of the human summary (composable).
     #[arg(long, global = true)]
@@ -128,7 +128,7 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
         /// Minimum acceptable cover edge (px).
-        #[arg(long, default_value_t = 250)]
+        #[arg(long, default_value_t = covers::DEFAULT_MIN_EDGE_PX)]
         min_dim: u32,
     },
     /// Backfill .lrc lyrics from LRCLIB (synced preferred). Writes into the
