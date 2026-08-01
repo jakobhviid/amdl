@@ -215,6 +215,15 @@ cmake --build build -j --config Release
 ./build/bin/whisper-server -m models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8080 --convert
 ```
 
+**Tuning onset accuracy.** `large-v3-turbo` (the tested default) has a shallow
+4-layer decoder — fast, but slightly less precise on timestamps and more prone to
+end-of-track hallucination on sparse audio. That's mostly harmless here: alignment
+matches against the *known* lyrics, so hallucinated tails simply fail to match.
+Two levers if you want sharper onsets: (a) serve full **`large-v3`** (non-turbo)
+and point `whisper_model` at it; and/or (b) build whisper.cpp with DTW token
+timestamps (`-dtw large-v3-turbo` on the server). Confidence per line is the
+matched/total word ratio; lines below `0.5` overall are dropped back to plain.
+
 **Instrumentals & wrong matches.** `lyrics` guards against the classic bad
 auto-match (a vocal lyric landing on an instrumental/score/cover). It skips
 tracks whose title explicitly says `(Instrumental)`/`(Instrumental Version)` and

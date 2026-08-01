@@ -1,20 +1,17 @@
 //! Forced lyric alignment — generate *synced* lyrics from *plain* ones by
-//! listening to the track. Ported from the retired `amdl-aligner` container so
-//! there's no separate service to run: point `[lyrics] whisper_url` at any
-//! OpenAI-compatible whisper.cpp transcription endpoint and alignment happens
-//! in-process.
+//! listening to the track. No separate service to run: point `[lyrics]
+//! whisper_url` at any OpenAI-compatible whisper.cpp transcription endpoint and
+//! alignment happens in-process.
 //!
 //! The endpoint gives us a word stream — each spoken word with an absolute
-//! `start` time. We diff that stream against the *known* lyric words (the same
-//! `difflib.SequenceMatcher` matching-block algorithm the container used) to map
-//! each lyric line to a timestamp, interpolate lines whisper never heard, and
-//! force the result monotonic. Onset accuracy is ~0.7 s (the "Generated" tier).
+//! `start` time. We diff that stream against the *known* lyric words (the
+//! `difflib.SequenceMatcher` matching-block algorithm) to map each lyric line to
+//! a timestamp, interpolate lines whisper never heard, and force the result
+//! monotonic. Onset accuracy is ~0.7 s (the "Generated" tier).
 //!
-//! What moved vs. the container: the container ran its *own* warm `whisper-server`
-//! with `-ml 1 -sow` so each segment collapsed to one word (a hack to expose word
-//! times). The unified endpoint returns a native `segments[].words[]` array with
-//! real per-word `start`/`end`, so we consume that directly — strictly better
-//! data, one whisper to manage instead of two.
+//! We consume the endpoint's native `segments[].words[]` array (verbose_json +
+//! word timestamps) directly, so each word carries a real `start`/`end` — no
+//! per-word server tricks needed.
 use std::collections::HashMap;
 use std::path::Path;
 

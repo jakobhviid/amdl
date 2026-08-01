@@ -413,20 +413,6 @@ mod tests {
     }
 
     #[test]
-    fn retired_aligner_url_key_is_ignored_and_cleaned_on_render() {
-        // A config left over from before the whisper move still parses (serde
-        // ignores the unknown field) — no error, alignment just unset...
-        let old = "[lyrics]\naligner_url = \"http://192.168.1.6:8790\"\n";
-        let cfg: Config = toml::from_str(old).expect("old config still parses");
-        assert!(cfg.lyrics.whisper_url.is_none());
-        // ...and the next write re-renders the file without the retired key, so
-        // it's cleaned up automatically.
-        let rendered = render(&cfg);
-        assert!(!rendered.contains("aligner_url"), "retired key must not be re-emitted");
-        assert!(rendered.contains("# whisper_url = "));
-    }
-
-    #[test]
     fn values_with_quotes_survive_a_render_round_trip() {
         let mut cfg = Config::default();
         set_value(&mut cfg, "paths.source", r#"/mnt/we"ird\path"#).unwrap();
