@@ -96,15 +96,37 @@ pub fn path() -> PathBuf {
     base.join("amdl").join("config.toml")
 }
 
+/// Settings removed in past versions. If one is still sitting in an on-disk
+/// config after an upgrade, [`load`] drops it automatically (see below).
+const RETIRED_KEYS: &[&str] = &["aligner_url"];
+
 /// Load config if present; otherwise defaults (all `None`). Never errors — a
 /// malformed file just falls back to defaults. Used by the read path of every
 /// command; the `configure` subcommand uses [`load_strict`] so it never silently
 /// clobbers a hand-edited file it couldn't parse.
+///
+/// Self-heals retired keys: if the file still carries a setting we've since
+/// removed (e.g. the old `aligner_url`), it's re-rendered once without it — so a
+/// stale key left over from an upgrade cleans itself up on the next run instead
+/// of lingering. The rewrite is best-effort; a failure just leaves the (already
+/// ignored) key in place.
 pub fn load() -> Config {
-    std::fs::read_to_string(path())
-        .ok()
-        .and_then(|s| toml::from_str(&s).ok())
-        .unwrap_or_default()
+    let Ok(raw) = std::fs::read_to_string(path()) else { return Config::default() };
+    let Ok(cfg) = toml::from_str::<Config>(&raw) else { return Config::default() };
+    if has_retired_key(&raw) {
+        let _ = save(&cfg);
+    }
+    cfg
+}
+
+/// Whether the raw config text still declares any [`RETIRED_KEYS`] under a
+/// section. Parses independently of [`Config`] (which silently ignores unknown
+/// keys), so it can actually see a leftover the struct dropped.
+fn has_retired_key(raw: &str) -> bool {
+    let Ok(table) = raw.parse::<toml::Table>() else { return false };
+    table.values().filter_map(|v| v.as_table()).any(|section| {
+        RETIRED_KEYS.iter().any(|k| section.contains_key(*k))
+    })
 }
 
 /// Like [`load`] but distinguishes "no file" (→ defaults) from "file present but
@@ -410,6 +432,20 @@ mod tests {
         assert!(unset_value(&mut cfg, "paths.nope").is_err());
         assert!(set_value(&mut cfg, "lyrics.lrcapi_first", "maybe").is_err());
         assert!(set_value(&mut cfg, "paths.source", "").is_err()); // empty → use unset
+    }
+
+    #[test]
+    fn retired_keys_are_detected_for_cleanup_but_our_own_output_is_not() {
+        // A leftover retired key is spotted (so load() re-renders it away)...
+        assert!(has_retired_key("[lyrics]\naligner_url = \"http://host:8790\"\n"));
+        // ...while a clean config and our own rendered template are left alone
+        // (no false positive → no needless rewrite-on-load).
+        assert!(!has_retired_key("[lyrics]\nwhisper_url = \"http://host:8080\"\n"));
+        assert!(!has_retired_key(&template()));
+        // And the struct itself never surfaces the retired key.
+        let cfg: Config = toml::from_str("[lyrics]\naligner_url = \"x\"\n").unwrap();
+        assert!(cfg.lyrics.whisper_url.is_none());
+        assert!(!render(&cfg).contains("aligner_url"));
     }
 
     #[test]
