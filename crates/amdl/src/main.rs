@@ -1,7 +1,7 @@
 //! amdl — Apple Music → validated → Opus, into your library. A CLI around
 //! gamdl (download/decrypt) + ffmpeg (validate/convert), plus library-maintenance
 //! commands. The logic lives in `amdl-core`; this is the thin CLI layer.
-use amdl_core::{config, convert, cookies, covers, dedup, doctor, download, identify, journal, lyrics, recover, retag, stats, ui, validate};
+use amdl_core::{align, config, convert, cookies, covers, dedup, doctor, download, identify, journal, lyrics, recover, retag, stats, ui, validate};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
@@ -174,7 +174,7 @@ enum Cmd {
         force_embed: bool,
         /// Skip forced alignment. Alignment (generating *synced* lyrics from plain
         /// ones by listening to the track, marked `[re:amdl-align]`) runs
-        /// automatically for the untimed residue whenever `[lyrics] aligner_url`
+        /// automatically for the untimed residue whenever `[lyrics] whisper_url`
         /// is configured; this opts out of it (still fetches + upgrades).
         #[arg(long)]
         no_align: bool,
@@ -323,13 +323,14 @@ Settable keys (run `amdl configure keys` for a description of each):
   paths.source          paths.output          convert.bitrate
   keys.acoustid         keys.discogs
   lyrics.lrcapi_url     lyrics.lrcapi_key     lyrics.lrcapi_first
-  lyrics.aligner_url    lyrics.hints
+  lyrics.whisper_url    lyrics.whisper_model  lyrics.whisper_key
+  lyrics.hints
 
 Keys can be written as words or dotted, and booleans take on/off:
   amdl configure set lyrics hints off
   amdl configure set lyrics.hints off
   amdl configure set paths output /music/lib
-  amdl configure get lyrics aligner_url";
+  amdl configure get lyrics whisper_url";
 
 /// Sub-actions of `amdl configure`. A key can be given as words (`lyrics hints`)
 /// or dotted (`lyrics.hints`); [`join_key`] normalizes both. Booleans take
@@ -342,7 +343,7 @@ enum ConfigAction {
         #[arg(required = true, num_args = 2.., value_name = "KEY... VALUE")]
         args: Vec<String>,
     },
-    /// Delete a setting, reverting it to its default: `configure unset lyrics aligner_url`.
+    /// Delete a setting, reverting it to its default: `configure unset lyrics whisper_url`.
     Unset {
         /// Key, words or dotted (see `configure keys`).
         #[arg(required = true, num_args = 1.., value_name = "KEY")]
@@ -827,6 +828,86 @@ fn print_identify(r: &identify::Report) {
     }
 }
 
+/// Build the whisper alignment config from `[lyrics]` settings, or `None` when
+/// no endpoint is configured (alignment is then simply off). The model falls
+/// back to the tested default when unset.
+fn whisper_from_cfg(cfg: &config::Config) -> Option<align::Whisper> {
+    let url = cfg.lyrics.whisper_url.clone()?;
+    Some(align::Whisper {
+        url,
+        model: cfg.lyrics.whisper_model.clone().unwrap_or_else(|| align::DEFAULT_MODEL.to_string()),
+        key: cfg.lyrics.whisper_key.clone(),
+    })
+}
+
+/// One-time guided setup for lyric alignment, shown on an interactive terminal
+/// when no `whisper_url` is configured yet. Walks the user through pasting an
+/// endpoint URL, picking a model (recommending the tested default), and an
+/// optional API key, then persists it to `config.toml` and returns the ready
+/// [`align::Whisper`]. Returns `Ok(None)` if the user skips (blank URL).
+fn setup_whisper_interactive() -> Result<Option<align::Whisper>> {
+    println!();
+    ui::info("Set up lyric alignment — generate synced lyrics for tracks no source has timed,");
+    ui::info("by listening to the track. amdl needs an OpenAI-compatible whisper.cpp endpoint");
+    ui::info("(e.g. a llama-swap or whisper-server box on your LAN) that returns word timestamps.");
+    let url = ui::ask("\nWhisper endpoint URL (e.g. http://192.168.1.6:8080) — blank to skip:");
+    if url.is_empty() {
+        ui::info("skipped — run `amdl lyrics` again anytime to set it up, or `amdl configure set lyrics whisper_url …`.");
+        return Ok(None);
+    }
+    let url = url.trim_end_matches('/').to_string();
+
+    // A key is optional — many self-hosted endpoints are open on the LAN. Ask
+    // first so we can authenticate the model probe if the endpoint needs it.
+    let key_in = ui::ask("API key (Bearer token) — blank if the endpoint needs none:");
+    let key = if key_in.is_empty() { None } else { Some(key_in) };
+
+    // Try to discover which models are whisper/STT so the user can pick one;
+    // always offer the tested default, and recommend it.
+    ui::info("checking the endpoint for available whisper models…");
+    let mut models = align::whisper_models(&url, key.as_deref());
+    if !models.iter().any(|m| m == align::DEFAULT_MODEL) {
+        // Surface the tested default as a choice even if the probe didn't list
+        // it (or couldn't reach /v1/models).
+        models.insert(0, align::DEFAULT_MODEL.to_string());
+    }
+    let model = pick_model(&models);
+
+    // Persist so this is a one-time flow. Re-render keeps the file's help and
+    // drops any retired keys automatically.
+    let mut cfg = config::load_strict().unwrap_or_default();
+    config::set_value(&mut cfg, "lyrics.whisper_url", &url).ok();
+    config::set_value(&mut cfg, "lyrics.whisper_model", &model).ok();
+    if let Some(k) = &key {
+        config::set_value(&mut cfg, "lyrics.whisper_key", k).ok();
+    }
+    match config::save(&cfg) {
+        Ok(()) => ui::ok(&format!("saved — alignment will use {model} at {url} (change it anytime with `amdl configure`).")),
+        Err(e) => ui::warn(&format!("couldn't save config ({e}); using these settings for this run only.")),
+    }
+    Ok(Some(align::Whisper { url, model, key }))
+}
+
+/// Let the user choose from the discovered whisper `models`, recommending the
+/// tested default. Auto-selects when there's only one choice.
+fn pick_model(models: &[String]) -> String {
+    let default = align::DEFAULT_MODEL;
+    if models.len() == 1 {
+        return models[0].clone();
+    }
+    println!();
+    ui::info("Pick a whisper model:");
+    for (i, m) in models.iter().enumerate() {
+        let tag = if m == default { "  ← recommended (what amdl is tested against)" } else { "" };
+        println!("  {:>2}. {m}{tag}", i + 1);
+    }
+    // Default choice = the recommended model's number.
+    let default_idx = models.iter().position(|m| m == default).unwrap_or(0);
+    let ans = ui::ask(&format!("Number [{}]:", default_idx + 1));
+    let idx = ans.trim().parse::<usize>().ok().filter(|n| *n >= 1 && *n <= models.len()).map(|n| n - 1).unwrap_or(default_idx);
+    models[idx].clone()
+}
+
 /// Interactive human-tail: list the remaining coverless albums (most tracks
 /// first) and let the operator paste a URL per album; each is embedded across
 /// the whole album.
@@ -1116,16 +1197,21 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 }
                 return Ok(());
             }
-            // Alignment runs automatically once [lyrics] aligner_url is configured;
-            // --no-align opts out. With no aligner configured it simply doesn't run.
-            let aligner_url = cfg.lyrics.aligner_url.clone();
-            let want_align = !no_align && aligner_url.is_some();
-            // Nudge when no aligner is set — plain lyrics could be timed by an
-            // alignment server. Silenceable via config; hidden in --json.
-            if aligner_url.is_none() && cfg.lyrics.hints && !json {
-                ui::info("tip: an alignment server can generate synced lyrics for tracks no source has timed — set [lyrics] aligner_url. https://github.com/jakobhviid/amdl-aligner");
+            // Alignment runs automatically once [lyrics] whisper_url is configured;
+            // --no-align opts out. When it's unset and we're on an interactive
+            // terminal, offer a one-time guided setup (paste URL + optional key,
+            // pick a model). With nothing configured it simply doesn't run.
+            let mut whisper = whisper_from_cfg(&cfg);
+            if !no_align && whisper.is_none() && !json && ui::stdin_tty() && cfg.lyrics.hints {
+                whisper = setup_whisper_interactive()?;
+            }
+            // Passive nudge when there's still no endpoint (non-interactive, or the
+            // user skipped setup) — plain lyrics could be timed. Hidden in --json.
+            if whisper.is_none() && cfg.lyrics.hints && !json {
+                ui::info("tip: point amdl at a whisper endpoint to generate synced lyrics for tracks no source has timed — `amdl configure set lyrics whisper_url http://host:8080` (or run `amdl lyrics` interactively and follow the prompt).");
                 ui::info("     turn off these hints: amdl configure set lyrics hints off");
             }
+            let want_align = !no_align && whisper.is_some();
             let opts = lyrics::Options {
                 upgrade_synced: !no_upgrade, // upgrade is the default; --no-upgrade opts out
                 embed: embed || force_embed, // --force-embed implies --embed
@@ -1144,7 +1230,7 @@ fn dispatch(cmd: Cmd, json: bool) -> Result<()> {
                 }
                 _ => None,
             };
-            let r = lyrics::backfill(&output, jobs, opts, fallback.as_ref(), aligner_url.as_deref());
+            let r = lyrics::backfill(&output, jobs, opts, fallback.as_ref(), whisper.as_ref());
             if json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {

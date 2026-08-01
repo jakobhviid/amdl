@@ -5,6 +5,7 @@
 //! rules that hold across the crate: never write to a source directory, prefer
 //! idempotent + resumable operations, and gate any fuzzy write behind a
 //! confidence check (see `report`/`journal`).
+pub mod align;
 pub mod config;
 pub mod convert;
 pub mod cookies;

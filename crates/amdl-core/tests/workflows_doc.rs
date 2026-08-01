@@ -5,8 +5,8 @@
 //! assertion below fails, fix WHICHEVER is wrong (the constant or the doc) so
 //! they match again.
 //!
-//! Not guarded: the "~0.7 s" alignment onset figure in the lyrics section is a
-//! property of the external amdl-aligner service, not a constant in this repo.
+//! Not guarded: the "~0.7 s" alignment onset figure in the lyrics section is an
+//! empirical property of the whisper model, not a constant in this repo.
 
 use amdl_core::{covers, doctor, identify, journal, lyrics, recover};
 

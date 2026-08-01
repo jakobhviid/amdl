@@ -53,7 +53,7 @@ fn config_init_writes_a_valid_annotated_template() {
     amdl(home.path(), undo.path()).args(["config", "--init"]).assert().success();
     let cfg = std::fs::read_to_string(home.path().join("amdl/config.toml")).unwrap();
     // Sections + a key present; amdl-core's unit test verifies it parses as TOML.
-    assert!(cfg.contains("[lyrics]") && cfg.contains("aligner_url"), "template missing sections");
+    assert!(cfg.contains("[lyrics]") && cfg.contains("whisper_url"), "template missing sections");
     assert!(cfg.contains("[paths]") && cfg.contains("[keys]"));
 }
 

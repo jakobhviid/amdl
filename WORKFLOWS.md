@@ -30,14 +30,14 @@ amdl configure --help                                 # lists every settable key
 amdl configure set lyrics hints off                   # words + on/off for booleans
 amdl configure set lyrics.hints off                   # ...same, dotted (equivalent)
 amdl configure set paths output /mnt/music/library    # set (or update) a value
-amdl configure set lyrics aligner_url http://192.168.1.6:8790
+amdl configure set lyrics whisper_url http://192.168.1.6:8080
 amdl configure get paths output                       # bare value (empty if unset) — for $(…)
 amdl configure list --json                            # all keys → values, machine-readable
-amdl configure unset lyrics aligner_url               # delete a setting (revert to its default)
+amdl configure unset lyrics whisper_url               # delete a setting (revert to its default)
 ```
 
 (`lyrics hints` in the examples above toggles the lyric *tips* amdl prints — e.g.
-the suggestion to set up an alignment server when none is configured; `off`
+the suggestion to set up a whisper endpoint when none is configured; `off`
 silences them. It changes no library data. `amdl configure keys` gives a one-line
 description of every settable key.)
 
@@ -176,26 +176,43 @@ source chain.
 alignment produces *synced* lyrics from *plain* ones by listening to the track
 (forced alignment) — for the residue that neither lrclib nor your LrcApi has
 timed, **including tracks whose only lyrics are embedded in the file's `LYRICS`
-tag** (nothing on disk, nothing online). It needs a running
-[amdl-aligner](https://github.com/jakobhviid/amdl-aligner) service (GPU
-recommended) set as `[lyrics] aligner_url`. Results are written at the
+tag** (nothing on disk, nothing online). It runs in-process against any
+OpenAI-compatible **whisper.cpp** transcription endpoint (a llama-swap or
+`whisper-server` box on your LAN, GPU recommended) that returns word timestamps —
+set `[lyrics] whisper_url` and amdl appends `/v1/audio/transcriptions`. No
+separate service to run: the first interactive `amdl lyrics` walks you through
+setup (paste the URL, pick a model, optional API key). Results are written at the
 **Generated** tier — marked `[re:amdl-align]` so they're recognizable as
 machine-made, lower quality than a real synced source (~0.7 s onset accuracy),
 and auto-upgraded later if a real synced version appears. Low-confidence
 alignments are dropped back to plain.
 
-**Alignment is on by default once `aligner_url` is set** — no flag needed. Use
-`--no-align` to skip it (fetch + upgrade only). With no `aligner_url` configured
+**Alignment is on by default once `whisper_url` is set** — no flag needed. Use
+`--no-align` to skip it (fetch + upgrade only). With no `whisper_url` configured
 it simply doesn't run.
 
 ```toml
 [lyrics]
-aligner_url = "http://192.168.1.6:8790"    # your amdl-aligner service (LAN)
+whisper_url   = "http://192.168.1.6:8080"      # your whisper.cpp endpoint (LAN)
+whisper_model = "whisper-large-v3-turbo"        # optional; this is the tested default
+# whisper_key = "…"                             # optional; Bearer token if the endpoint needs one
 ```
 ```sh
-amdl lyrics /music/lib                     # with aligner_url set: fetch + upgrade + align the residue
+amdl lyrics /music/lib                     # with whisper_url set: fetch + upgrade + align the residue
 amdl lyrics /music/lib --no-align          # ...but skip the Generated-tier alignment
 amdl lyrics /music/lib --embed             # align (default) and embed the results too
+```
+
+**No whisper box? Run your own** (any whisper.cpp `whisper-server` satisfies the
+contract — OpenAI route `POST /v1/audio/transcriptions`, `response_format=verbose_json`
++ `timestamp_granularities[]=word`, returning `segments[].words[]` with `start`/`end`):
+
+```sh
+git clone https://github.com/ggerganov/whisper.cpp && cd whisper.cpp
+cmake -B build -DWHISPER_VULKAN=ON         # or -DGGML_CUDA=ON / -DWHISPER_METAL=ON / CPU
+cmake --build build -j --config Release
+./models/download-ggml-model.sh large-v3-turbo
+./build/bin/whisper-server -m models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8080 --convert
 ```
 
 **Instrumentals & wrong matches.** `lyrics` guards against the classic bad

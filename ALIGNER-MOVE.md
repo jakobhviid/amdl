@@ -1,6 +1,9 @@
 # Moving lyric alignment into `amdl` (retire the `amdl-aligner` container)
 
-**Status:** Recommended — **MOVE IT.**
+**Status:** ✅ **IMPLEMENTED** (was: Recommended — MOVE IT). Alignment now lives in
+`amdl-core::align`; config uses `[lyrics] whisper_url`/`whisper_model`/`whisper_key`.
+The design below is kept as the rationale/record. Next: cut over config and retire
+the container on Nous per §9.
 **Date:** 2026-08-01
 **Scope:** Replace the dedicated `amdl-aligner` HTTP service (Nous host `:8790`, `POST /align`)
 with alignment logic living **inside `amdl`**, driven by the unified **llama-swap whisper

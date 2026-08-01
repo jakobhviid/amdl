@@ -31,7 +31,7 @@ pub struct Report {
     /// Tracks whose lyrics were (re)written into the audio file's `LYRICS` tag
     /// (only counted when `embed` is on).
     pub embedded: usize,
-    /// Plain `.lrc` files turned into synced by the alignment service (Generated
+    /// Plain `.lrc` files turned into synced by forced alignment (Generated
     /// tier; only counted when `align` is on).
     pub aligned: usize,
     pub not_found: usize,
@@ -50,9 +50,9 @@ pub struct Options {
     /// When embedding, overwrite even if it isn't an upgrade — including
     /// replacing an already-*synced* embed. Off = never downgrade / never churn.
     pub force_embed: bool,
-    /// Generate *synced* lyrics from plain ones via the forced-alignment service
-    /// (config `[lyrics] aligner_url`) when no source has timed lyrics. Results
-    /// are marked `[re:amdl-align]` (the "Generated" tier).
+    /// Generate *synced* lyrics from plain ones by forced alignment against the
+    /// whisper endpoint (config `[lyrics] whisper_url`) when no source has timed
+    /// lyrics. Results are marked `[re:amdl-align]` (the "Generated" tier).
     pub align: bool,
 }
 
@@ -63,7 +63,7 @@ enum Fetched {
     NotFound,
 }
 
-pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fallback>, aligner_url: Option<&str>) -> Report {
+pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fallback>, whisper: Option<&crate::align::Whisper>) -> Report {
     let files = list_audio(output);
     if files.is_empty() {
         return Report::default();
@@ -80,13 +80,14 @@ pub fn backfill(output: &Path, jobs: usize, opts: Options, fallback: Option<&Fal
             // its resulting lyric text so later stages can use it.
             let (mut content, pre) = settle_sidecar(f, opts, &c, fallback);
             // Stage 1b: if we ended up with *plain* lyrics and no source had a
-            // synced version, generate synced ones via the alignment service
-            // (Generated tier, marked). Only fires when alignment is enabled
-            // (a configured aligner, not opted out) and the text isn't synced.
+            // synced version, generate synced ones by forced alignment against
+            // the whisper endpoint (Generated tier, marked). Only fires when
+            // alignment is enabled (whisper configured, not opted out) and the
+            // text isn't already synced.
             if opts.align {
-                if let (Some(url), Some(text)) = (aligner_url, content.clone()) {
+                if let (Some(w), Some(text)) = (whisper, content.clone()) {
                     if !is_synced(text.as_bytes()) {
-                        if let Some(gen) = align_track(url, f, &text) {
+                        if let Some(gen) = align_track(w, f, &text) {
                             let lrc = f.with_extension("lrc");
                             // If a sidecar already existed we're replacing it
                             // (plain → synced); if the lyrics only lived in the
@@ -611,46 +612,19 @@ fn list_audio(root: &Path) -> Vec<PathBuf> {
 /// the track plain (a wrong sync is worse than none).
 const ALIGN_MIN_CONF: f64 = 0.5;
 
-/// POST the audio + plain lyric lines to the amdl-aligner service and assemble a
-/// synced `.lrc` (marked `[re:amdl-align]` = Generated tier) from the returned
-/// per-line timings. `None` if the service errors or confidence is too low.
-fn align_track(url: &str, audio_path: &Path, plain: &str) -> Option<String> {
-    let audio = std::fs::read(audio_path).ok()?;
-    let filename = audio_path.file_name()?.to_string_lossy().to_string();
-    let boundary = "amdlaligner7c3f9b2boundary";
-    let mut body = Vec::new();
-    body.extend_from_slice(
-        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes(),
-    );
-    body.extend_from_slice(&audio);
-    body.extend_from_slice(b"\r\n");
-    body.extend_from_slice(
-        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"lyrics\"\r\n\r\n").as_bytes(),
-    );
-    body.extend_from_slice(plain.as_bytes());
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-
-    // Alignment is slow (seconds on GPU, longer on CPU) — allow a generous read.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(600))
-        .build();
-    let resp = agent
-        .post(&format!("{}/align", url.trim_end_matches('/')))
-        .set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
-        .send_bytes(&body)
-        .ok()?;
-    let text = resp.into_string().ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let conf = v.get("overall_conf").and_then(|x| x.as_f64()).unwrap_or(0.0);
-    let lines = v.get("lines")?.as_array()?;
-    if conf < ALIGN_MIN_CONF || lines.is_empty() {
+/// Force-align `plain` lyric lines to `audio_path` via the whisper endpoint and
+/// assemble a synced `.lrc` (marked `[re:amdl-align]` = Generated tier) from the
+/// per-line timings. `None` if transcription fails or confidence is too low.
+///
+/// Thin wrapper over [`crate::align::align`]: it owns the transport + alignment
+/// math; here we just apply the confidence gate and format the LRC.
+fn align_track(w: &crate::align::Whisper, audio_path: &Path, plain: &str) -> Option<String> {
+    let lines: Vec<&str> = plain.lines().collect();
+    let result = crate::align::align(w, audio_path, &lines)?;
+    if result.overall_conf < ALIGN_MIN_CONF || result.lines.is_empty() {
         return None;
     }
-    let mut rows: Vec<(f64, String)> = lines
-        .iter()
-        .filter_map(|l| Some((l.get("start")?.as_f64()?, l.get("text")?.as_str()?.to_string())))
-        .collect();
+    let mut rows: Vec<(f64, String)> = result.lines.into_iter().map(|l| (l.start, l.text)).collect();
     rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut out = format!("{ALIGN_MARKER}\n");
     for (start, text) in rows {

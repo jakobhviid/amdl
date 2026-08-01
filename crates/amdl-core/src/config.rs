@@ -58,12 +58,18 @@ pub struct Lyrics {
     /// hit still beats a plain one; this only decides which source wins a tie and
     /// is consulted first.
     pub lrcapi_first: bool,
-    /// Optional forced-alignment service (amdl-aligner) URL, e.g.
-    /// "http://192.168.1.6:8790". Enables `lyrics` alignment: generate *synced*
-    /// lyrics from plain ones by listening to the track. Alignment runs by
-    /// default once this is set. See github.com/jakobhviid/amdl-aligner.
-    pub aligner_url: Option<String>,
-    /// Show lyric hints — e.g. the tip suggesting an alignment server when none
+    /// Optional whisper transcription endpoint (OpenAI-compatible, whisper.cpp),
+    /// e.g. "http://192.168.1.6:8080" — amdl appends `/v1/audio/transcriptions`.
+    /// Enables `lyrics` alignment: generate *synced* lyrics from plain ones by
+    /// listening to the track. Alignment runs by default once this is set.
+    pub whisper_url: Option<String>,
+    /// Whisper model id the endpoint exposes. Optional — defaults to
+    /// `whisper-large-v3-turbo` (see [`align::DEFAULT_MODEL`]).
+    pub whisper_model: Option<String>,
+    /// Optional API key for `whisper_url`, sent as `Authorization: Bearer <key>`.
+    /// Leave unset for an open LAN endpoint (the common self-hosted case).
+    pub whisper_key: Option<String>,
+    /// Show lyric hints — e.g. the tip suggesting a whisper endpoint when none
     /// is configured. **On by default**; set off to silence all lyric hints.
     pub hints: bool,
 }
@@ -74,7 +80,9 @@ impl Default for Lyrics {
             lrcapi_url: None,
             lrcapi_key: None,
             lrcapi_first: false,
-            aligner_url: None,
+            whisper_url: None,
+            whisper_model: None,
+            whisper_key: None,
             hints: true, // hints on unless explicitly disabled
         }
     }
@@ -135,8 +143,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("lyrics.lrcapi_url", "fallback LrcApi lyrics server URL"),
     ("lyrics.lrcapi_key", "LrcApi key, sent as the Authorization header"),
     ("lyrics.lrcapi_first", "query LrcApi before lrclib.net (true/false)"),
-    ("lyrics.aligner_url", "amdl-aligner service URL (enables lyrics alignment)"),
-    ("lyrics.hints", "show lyric hints, e.g. the alignment-server tip (on/off)"),
+    ("lyrics.whisper_url", "whisper transcription endpoint URL (enables lyrics alignment)"),
+    ("lyrics.whisper_model", "whisper model id (default whisper-large-v3-turbo)"),
+    ("lyrics.whisper_key", "whisper endpoint API key (optional; Bearer token)"),
+    ("lyrics.hints", "show lyric hints, e.g. the alignment tip (on/off)"),
 ];
 
 /// Read one setting as a display string. `Ok(None)` = valid key but unset;
@@ -153,7 +163,9 @@ pub fn get_value(cfg: &Config, key: &str) -> Result<Option<String>, String> {
         "lyrics.lrcapi_url" => s(&cfg.lyrics.lrcapi_url),
         "lyrics.lrcapi_key" => s(&cfg.lyrics.lrcapi_key),
         "lyrics.lrcapi_first" => Some(on_off(cfg.lyrics.lrcapi_first)),
-        "lyrics.aligner_url" => s(&cfg.lyrics.aligner_url),
+        "lyrics.whisper_url" => s(&cfg.lyrics.whisper_url),
+        "lyrics.whisper_model" => s(&cfg.lyrics.whisper_model),
+        "lyrics.whisper_key" => s(&cfg.lyrics.whisper_key),
         "lyrics.hints" => Some(on_off(cfg.lyrics.hints)),
         _ => return Err(unknown_key(key)),
     })
@@ -175,7 +187,9 @@ pub fn set_value(cfg: &mut Config, key: &str, value: &str) -> Result<(), String>
         "lyrics.lrcapi_url" => cfg.lyrics.lrcapi_url = Some(value.to_string()),
         "lyrics.lrcapi_key" => cfg.lyrics.lrcapi_key = Some(value.to_string()),
         "lyrics.lrcapi_first" => cfg.lyrics.lrcapi_first = parse_bool(value)?,
-        "lyrics.aligner_url" => cfg.lyrics.aligner_url = Some(value.to_string()),
+        "lyrics.whisper_url" => cfg.lyrics.whisper_url = Some(value.to_string()),
+        "lyrics.whisper_model" => cfg.lyrics.whisper_model = Some(value.to_string()),
+        "lyrics.whisper_key" => cfg.lyrics.whisper_key = Some(value.to_string()),
         "lyrics.hints" => cfg.lyrics.hints = parse_bool(value)?,
         _ => return Err(unknown_key(key)),
     }
@@ -193,7 +207,9 @@ pub fn unset_value(cfg: &mut Config, key: &str) -> Result<(), String> {
         "lyrics.lrcapi_url" => cfg.lyrics.lrcapi_url = None,
         "lyrics.lrcapi_key" => cfg.lyrics.lrcapi_key = None,
         "lyrics.lrcapi_first" => cfg.lyrics.lrcapi_first = false,
-        "lyrics.aligner_url" => cfg.lyrics.aligner_url = None,
+        "lyrics.whisper_url" => cfg.lyrics.whisper_url = None,
+        "lyrics.whisper_model" => cfg.lyrics.whisper_model = None,
+        "lyrics.whisper_key" => cfg.lyrics.whisper_key = None,
         "lyrics.hints" => cfg.lyrics.hints = Lyrics::default().hints,
         _ => return Err(unknown_key(key)),
     }
@@ -269,12 +285,19 @@ pub fn render(cfg: &Config) -> String {
     o.push_str("# Flip priority to query the LrcApi server first, falling back to lrclib.net.\n");
     o.push_str("# Default (false) keeps lrclib.net primary. A synced match still beats a plain one.\n");
     line_bool(&mut o, "lrcapi_first", cfg.lyrics.lrcapi_first);
-    o.push_str("# Optional forced-alignment service (amdl-aligner) for `lyrics`: generates *synced*\n");
-    o.push_str("# lyrics from plain ones by listening to the track when no source has timed lyrics.\n");
-    o.push_str("# Alignment runs by default once this is set (`--no-align` opts out per run).\n");
-    o.push_str("# See https://github.com/jakobhviid/amdl-aligner\n");
-    line_str(&mut o, "aligner_url", &cfg.lyrics.aligner_url, "http://192.168.1.6:8790");
-    o.push_str("# Lyric hints — e.g. the tip suggesting an alignment server when none is set.\n");
+    o.push_str("# Forced alignment for `lyrics`: generate *synced* lyrics from plain ones by\n");
+    o.push_str("# listening to the track when no source has timed lyrics (marked [re:amdl-align]).\n");
+    o.push_str("# Point whisper_url at any OpenAI-compatible whisper.cpp transcription endpoint\n");
+    o.push_str("# that returns word timestamps; amdl appends /v1/audio/transcriptions. Alignment\n");
+    o.push_str("# runs by default once whisper_url is set (`--no-align` opts out per run). No\n");
+    o.push_str("# separate service to run — `amdl lyrics` walks you through setup on first use.\n");
+    line_str(&mut o, "whisper_url", &cfg.lyrics.whisper_url, "http://192.168.1.6:8080");
+    o.push_str("# Whisper model id the endpoint exposes. Optional — defaults to the value below.\n");
+    line_str(&mut o, "whisper_model", &cfg.lyrics.whisper_model, "whisper-large-v3-turbo");
+    o.push_str("# API key for whisper_url, sent as `Authorization: Bearer <key>`. Optional —\n");
+    o.push_str("# leave unset for an open endpoint on your LAN.\n");
+    line_str(&mut o, "whisper_key", &cfg.lyrics.whisper_key, "your-api-key-here");
+    o.push_str("# Lyric hints — e.g. the tip suggesting a whisper endpoint when none is set.\n");
     o.push_str("# On by default; disable with `amdl configure set lyrics hints off`.\n");
     // `hints` defaults on, so show it commented by default; only an explicit
     // off becomes an active line (TOML booleans are true/false — the on/off
@@ -321,7 +344,7 @@ mod tests {
         let t = template();
         // A fresh template must parse to all-defaults (nothing active).
         let cfg: Config = toml::from_str(&t).expect("template is valid TOML");
-        assert!(cfg.paths.source.is_none() && cfg.lyrics.aligner_url.is_none());
+        assert!(cfg.paths.source.is_none() && cfg.lyrics.whisper_url.is_none());
         assert!(!cfg.lyrics.lrcapi_first);
         // Every section header and every key's help/example line is present.
         for section in ["[paths]", "[convert]", "[keys]", "[lyrics]"] {
@@ -336,27 +359,27 @@ mod tests {
     #[test]
     fn set_get_unset_round_trip_through_the_rendered_file() {
         let mut cfg = Config::default();
-        set_value(&mut cfg, "lyrics.aligner_url", "http://192.168.1.6:8790").unwrap();
+        set_value(&mut cfg, "lyrics.whisper_url", "http://192.168.1.6:8080").unwrap();
         set_value(&mut cfg, "paths.output", "/mnt/music/library").unwrap();
         set_value(&mut cfg, "lyrics.lrcapi_first", "true").unwrap();
 
-        assert_eq!(get_value(&cfg, "lyrics.aligner_url").unwrap().as_deref(), Some("http://192.168.1.6:8790"));
+        assert_eq!(get_value(&cfg, "lyrics.whisper_url").unwrap().as_deref(), Some("http://192.168.1.6:8080"));
         // Booleans display as on/off regardless of how they were set.
         assert_eq!(get_value(&cfg, "lyrics.lrcapi_first").unwrap().as_deref(), Some("on"));
 
         // Rendered file must still carry the full help AND parse back to the same values.
         let rendered = render(&cfg);
-        assert!(rendered.contains("# Optional forced-alignment service"), "help dropped after set");
-        assert!(rendered.contains("aligner_url = \"http://192.168.1.6:8790\""));
+        assert!(rendered.contains("# Forced alignment for `lyrics`"), "help dropped after set");
+        assert!(rendered.contains("whisper_url = \"http://192.168.1.6:8080\""));
         assert!(rendered.contains("lrcapi_first = true"));
         let back: Config = toml::from_str(&rendered).unwrap();
         assert_eq!(back.paths.output, Some(PathBuf::from("/mnt/music/library")));
-        assert_eq!(back.lyrics.aligner_url.as_deref(), Some("http://192.168.1.6:8790"));
+        assert_eq!(back.lyrics.whisper_url.as_deref(), Some("http://192.168.1.6:8080"));
         assert!(back.lyrics.lrcapi_first);
 
-        unset_value(&mut cfg, "lyrics.aligner_url").unwrap();
-        assert!(get_value(&cfg, "lyrics.aligner_url").unwrap().is_none());
-        assert!(render(&cfg).contains("# aligner_url = "), "unset should re-comment the line");
+        unset_value(&mut cfg, "lyrics.whisper_url").unwrap();
+        assert!(get_value(&cfg, "lyrics.whisper_url").unwrap().is_none());
+        assert!(render(&cfg).contains("# whisper_url = "), "unset should re-comment the line");
     }
 
     #[test]
@@ -387,6 +410,20 @@ mod tests {
         assert!(unset_value(&mut cfg, "paths.nope").is_err());
         assert!(set_value(&mut cfg, "lyrics.lrcapi_first", "maybe").is_err());
         assert!(set_value(&mut cfg, "paths.source", "").is_err()); // empty → use unset
+    }
+
+    #[test]
+    fn retired_aligner_url_key_is_ignored_and_cleaned_on_render() {
+        // A config left over from before the whisper move still parses (serde
+        // ignores the unknown field) — no error, alignment just unset...
+        let old = "[lyrics]\naligner_url = \"http://192.168.1.6:8790\"\n";
+        let cfg: Config = toml::from_str(old).expect("old config still parses");
+        assert!(cfg.lyrics.whisper_url.is_none());
+        // ...and the next write re-renders the file without the retired key, so
+        // it's cleaned up automatically.
+        let rendered = render(&cfg);
+        assert!(!rendered.contains("aligner_url"), "retired key must not be re-emitted");
+        assert!(rendered.contains("# whisper_url = "));
     }
 
     #[test]
