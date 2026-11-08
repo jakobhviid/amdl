@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- amdl's icon: aligned album sleeves, the top one checked. The navy tile is shared by every tool's icon; the canonical copy of
+       each icon is site/icon.svg in its repository (jakobhviid.github.io/_software-template/README.md). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d3a5f"/><stop offset="1" stop-color="#002642"/></linearGradient>
+
+  </defs>
+  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#tile)"/>
+  <rect x="2.5" y="2.5" width="123" height="123" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+
+  <rect x="36" y="22" width="62" height="62" rx="5" fill="#f3efe4" fill-opacity="0.35"/>
+  <rect x="30" y="30" width="62" height="62" rx="5" fill="#f3efe4" fill-opacity="0.6"/>
+  <rect x="24" y="38" width="62" height="62" rx="5" fill="#f3efe4"/>
+  <circle cx="55" cy="69" r="20" fill="#002642"/><circle cx="55" cy="69" r="13" fill="none" stroke="#f3efe4" stroke-opacity="0.25" stroke-width="1.5"/><circle cx="55" cy="69" r="6" fill="#f0c36b"/>
+  <circle cx="92" cy="94" r="16" fill="#f0c36b"/><path d="M84.0 94 L90.08 100.08 L100.96000000000001 87.92" fill="none" stroke="#002642" stroke-width="5.12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,3 +1,5 @@
+<img src="site/icon.svg" alt="" width="96" align="right">
+
 # amdl — Audio Metadata & Lyrics Maintainer
 
 **A**udio **M**eta**d**ata & **L**yrics Maintainer — make the music library
