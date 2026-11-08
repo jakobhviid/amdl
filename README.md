@@ -34,6 +34,7 @@ x86_64 Linux, so no compiler/build tools are needed; pulls `gamdl` + `ffmpeg` as
 deps:
 
 ```sh
+brew trust --tap jakobhviid/tap   # once: Homebrew 6 and later load a third-party tap only when trusted
 brew install jakobhviid/tap/amdl
 ```
 
