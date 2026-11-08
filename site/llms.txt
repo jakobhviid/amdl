@@ -1,0 +1,52 @@
+# amdl
+
+> amdl turns a mixed collection of MP3s, m4a and CD rips into one uniform Opus library with complete tags, cover art and synced lyrics, then keeps it consistent with doctor, dedup, recover and undo. macOS and Linux.
+
+Audio Metadata & Lyrics Maintainer: one uniform Opus library with complete tags, cover art and synced lyrics, kept consistent as it grows. The complete reference, for people and LLMs, is built into the tool: run `amdl --llm`.
+amdl is one of the software projects by Jakob Hviid, all listed at https://jakob.hviid.phd/software/ (for LLMs: https://jakob.hviid.phd/llms.txt).
+
+## What it does
+
+- **Convert to Opus with fidelity**: `convert` transcodes `.m4a`, `.mp3` and `.flac` to Opus, re-embeds the source cover so players show it, strips iTunes junk tags and mirrors `.lrc` files. It skips what exists, so an interrupted run resumes.
+- **Tags and cover art**: `identify` fixes untagged tracks by sound (an AcoustID fingerprint) and writes only confident matches. `covers` fills missing art from the source, a sibling library, online sources, then a URL you paste. `tag` groups compilations.
+- **Synced lyrics**: `lyrics` fetches synced or plain lyrics from LRCLIB as `.lrc` files, re-times plain ones when a synced version appears, and can embed them in the file. With a whisper.cpp endpoint set, it generates synced lyrics from plain ones.
+- **Checks, and a way back**: `doctor` finds missing covers and tags, truncated and corrupt files; `dedup` lists duplicates without deleting. Every mutating run is journaled, and `undo` reverts a run without touching edits made since. Each batch command takes `--json`.
+
+## Install
+
+Homebrew, on macOS and Linux. Pours a prebuilt bottle on macOS and x86_64 Linux, so no compiler is needed. Pulls in `gamdl` and `ffmpeg` as dependencies. The tap is trusted once first, as Homebrew 6 and later ask.
+
+```sh
+brew trust --tap jakobhviid/tap
+brew install jakobhviid/tap/amdl
+```
+
+Or one line, without Homebrew. No compiler and no root: installs to `~/.local/bin`. It fetches only the `amdl` binary, so install `gamdl` and `ffmpeg` separately.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jakobhviid/amdl/main/install.sh | sh
+```
+
+Or build from source. Needs Rust. The binary lands in `./target/release/amdl`.
+
+```sh
+cargo build --release
+```
+
+Runtime dependencies. `ffmpeg` and `ffprobe` for transcoding and checks, `fpcalc` (Chromaprint) for `identify`, and `gamdl` for the optional `download` and `recover --online` commands. amdl is a maintainer, not a downloader: acquisition is gamdl's job, and amdl only thin-wraps a slice of it. Install and use gamdl per its own documentation, terms and your local laws; that part is at your own risk.
+
+```sh
+```
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/jakobhviid/amdl/main/README.md): every command, the common flags and installation
+- [WORKFLOWS.md](https://raw.githubusercontent.com/jakobhviid/amdl/main/WORKFLOWS.md): end-to-end recipes for building, scanning, covers, identify, recover, de-dup and undo
+
+## Optional
+
+- [Project page](https://jakob.hviid.phd/amdl/): the page this file accompanies
+- [Source](https://github.com/jakobhviid/amdl): MIT licensed
+- [Releases](https://github.com/jakobhviid/amdl/releases)
+- [All software by Jakob Hviid](https://jakob.hviid.phd/software/)
+- [Jakob Hviid's site, for LLMs](https://jakob.hviid.phd/llms.txt)
